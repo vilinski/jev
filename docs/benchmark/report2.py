@@ -86,8 +86,36 @@ notes=f'''<p><b>Speed.</b> Jev is the fastest and steadiest (p50 {J["lat"]["p50"
 <p><b>Accuracy.</b> All three are close (overall {J["acc_all"]:.0%} Jev, {Cl["acc_all"]:.0%} Clef, {O["acc_all"]:.0%} OpenAI) and the differences come from a handful of items, see the list below. Jev is flawless on yes/no and routing but weakest on severity; Clef is best on severity; OpenAI got one routing answer wrong in one of three runs, the only decision flip of the whole benchmark.</p>
 <p><b>Calibration is where they differ.</b> OpenAI’s log-probabilities are sharp: it is the best on yes/no (Brier {O["brier"]["noul"]:.4f}) but its confidence is {O["conf_bad"]:.2f} when wrong versus {O["conf_ok"]:.2f} when right, so confidence does not flag its mistakes. Jev is lower when wrong ({J["conf_bad"]:.2f} vs {J["conf_ok"]:.2f}) and flags every vague input as uncertain, which OpenAI and Clef do on only {O["amb_abstain"]:.0%} of them. Clef has the weakest Brier scores.</p>
 <p><b>Cost.</b> Not measured in money. Jev and Clef answer all questions of a request in one call. OpenAI makes one request per question, so a batch of N questions costs N requests (fast in parallel, not cheaper).</p>
-<p><b>Caveats.</b> Synthetic, small (60 items) and easy: yes/no and routing sit near the ceiling, and a single item changes a percentage by 2 points. Only 3 repeats. Latency is from the <code>jev</code> CLI with a fresh TLS connection per call, at different times of day for OpenAI and the others (Jev and Clef ran together earlier). The OpenAI result depends on the prompt that <code>jev</code> writes for it and on the model (<code>gpt-4.1-mini</code>); other models would score differently. Severity labels are my own judgement.</p>'''
-HTML=f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Decision API benchmark</title>
+<p><b>Caveats.</b> Synthetic, small (60 items) and easy: yes/no and routing sit near the ceiling, and a single item changes a percentage by 2 points. Only 3 repeats. Latency is from the <code>jev</code> CLI with a fresh TLS connection per call, with the three providers run back to back in one session, each as one block of 180 calls rather than interleaved, so time-of-day effects can still differ between them. The OpenAI result depends on the prompt that <code>jev</code> writes for it and on the model (<code>gpt-4.1-mini</code>); other models would score differently. Severity labels are the author's own judgement.</p>'''
+
+# SEO: regenerated with every report. Set REPORT_URL (e.g. https://example.com/jev-benchmark/) to emit the
+# canonical/og:url tags, robots.txt and sitemap.xml; without it only URL-independent tags are written.
+import os
+TITLE="Jev vs Clef vs OpenAI: decision API benchmark (latency, accuracy, calibration)"
+NCALLS=R[names[0]]["n"]
+DESC=(f"Measured comparison of TypeSafe Jev, Cloudflare Clef and OpenAI gpt-4.1-mini as typed decision models: "
+      f"latency, accuracy and calibration over {NCALLS} calls per model, run through the jev CLI on {now}.")
+URL=os.environ.get("REPORT_URL","").strip()
+REPO="https://github.com/vilinski/jev"
+seo=[f'<meta name="description" content="{esc(DESC)}">','<meta name="robots" content="index,follow">',
+     '<meta property="og:type" content="article">',f'<meta property="og:title" content="{esc(TITLE)}">',
+     f'<meta property="og:description" content="{esc(DESC)}">','<meta name="twitter:card" content="summary">',
+     f'<meta name="twitter:title" content="{esc(TITLE)}">',f'<meta name="twitter:description" content="{esc(DESC)}">',
+     '<meta name="color-scheme" content="light dark">']
+ld={"@context":"https://schema.org","@type":"TechArticle","headline":TITLE,"description":DESC,
+    "datePublished":now,"dateModified":now,"inLanguage":"en","author":{"@type":"Person","name":"Andreas Vilinski"},
+    "about":["decision models","LLM evaluation","latency","calibration"],
+    "isBasedOn":{"@type":"SoftwareSourceCode","name":"jev","codeRepository":REPO,"programmingLanguage":"Rust","license":"https://spdx.org/licenses/MIT.html"},
+    "citation":REPO}
+open("robots.txt","w").write("User-agent: *\nAllow: /\n"+(f"Sitemap: {URL.rstrip('/')}/sitemap.xml\n" if URL else ""))
+if URL:
+    seo+= [f'<link rel="canonical" href="{esc(URL)}">',f'<meta property="og:url" content="{esc(URL)}">']
+    ld["mainEntityOfPage"]=URL
+    open("sitemap.xml","w").write(f'<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>{esc(URL)}</loc><lastmod>{now}</lastmod></url></urlset>\n')
+seo.append('<script type="application/ld+json">'+json.dumps(ld)+'</script>')
+SEO="\n".join(seo)
+HTML=f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{esc(TITLE)}</title>
+{SEO}
 <style>
 :root{{--bg:#fafaf7;--fg:#1b1b1b;--mut:#666;--card:#fff;--line:#e3e1da;--bad:#fbe3e0;--good:#e3f4e6}}
 @media(prefers-color-scheme:dark){{:root{{--bg:#16171a;--fg:#ececec;--mut:#9a9a9a;--card:#1f2024;--line:#33353a;--bad:#4a2522;--good:#1f3a25}}}}
@@ -100,10 +128,10 @@ svg text{{fill:var(--fg)}} .lbl{{font-size:12.5px;font-weight:600}} .val{{font-s
 .grid{{stroke:var(--line);stroke-width:1}}
 .key{{display:flex;gap:16px;margin:10px 0;font-weight:600}} .key i{{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:6px}}
 table{{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--line)}} th,td{{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top;font-size:14px}}
-td.bad{{background:var(--bad)}} td.good{{background:var(--good)}} .tw{{overflow-x:auto}} .note{{background:var(--card);border-left:4px solid #999;padding:4px 16px;border-radius:4px}}
+a{{color:inherit}} td.bad{{background:var(--bad)}} td.good{{background:var(--good)}} .tw{{overflow-x:auto}} .note{{background:var(--card);border-left:4px solid #999;padding:4px 16px;border-radius:4px}}
 </style></head><body><main>
 <h1>Decision API benchmark: Jev vs Clef vs OpenAI</h1>
-<p class="sub">{now} · 180 calls per model (60 synthetic labelled items × 3 runs) · via the <code>jev</code> CLI, one question per call · OpenAI = gpt-4.1-mini read through token log-probabilities</p>
+<p class="sub">{now} · 180 calls per model (60 synthetic labelled items × 3 runs) · via the <a href="{REPO}"><code>jev</code> CLI</a>, one question per call · OpenAI = gpt-4.1-mini read through token log-probabilities</p>
 <div class="key">{"".join(f'<span><i style="background:{COL[n]}"></i>{esc(n)}</span>' for n in names)}</div>
 <h2>Speed</h2><div class="grid2">{"".join(charts[:5])}</div>
 <h2>Accuracy</h2><div class="grid2">{"".join(charts[5:9])}</div>
@@ -111,5 +139,6 @@ td.bad{{background:var(--bad)}} td.good{{background:var(--good)}} .tw{{overflow-
 <h2>More numbers</h2><div class="tw"><table><tr><th>Metric</th>{th}</tr>{tbl}</table></div>
 <h2>Items where a model was wrong (majority of 3 runs)</h2><div class="tw"><table><tr><th>Text</th><th>Gold</th>{th}</tr>{"".join(trs)}</table></div>
 <h2>Reading the results</h2><div class="note">{notes}</div>
+<footer class="sub" style="margin-top:32px">Measured with <a href="{REPO}">jev</a> — a Rust CLI for typed decision models (TypeSafe Jev, Cloudflare Clef, Ollama, OpenAI). Source, benchmark scripts and raw results: <a href="{REPO}/tree/main/docs/benchmark">{REPO.replace("https://","")}</a>. Generated {now}.</footer>
 </main></body></html>'''
 open("report.html","w").write(HTML)

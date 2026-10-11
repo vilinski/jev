@@ -1,1 +1,3 @@
 target/
+__pycache__/
+docs/benchmark/run-*.log

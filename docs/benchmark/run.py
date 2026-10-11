@@ -1,4 +1,4 @@
-import sys; sys.path.insert(0, "/private/tmp/claude-501/-Users-vilinski/d590bfa6-9d03-485b-b925-cf3f3649420b/scratchpad/bench")
+import sys
 import json, subprocess, time, statistics, os
 from dataset import *
 prov, reps, out = sys.argv[1], int(sys.argv[2]), sys.argv[3]

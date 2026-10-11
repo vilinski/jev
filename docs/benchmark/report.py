@@ -1,5 +1,4 @@
 import json, statistics as st, re, html, datetime, sys
-sys.path.insert(0, "/private/tmp/claude-501/-Users-vilinski/d590bfa6-9d03-485b-b925-cf3f3649420b/scratchpad/bench")
 from dataset import *
 P = {"Jev (TypeSafe)":"jev.json","Clef (Cloudflare)":"clef.json"}
 COL = {"Jev (TypeSafe)":"#2f6fed","Clef (Cloudflare)":"#e8710a"}
