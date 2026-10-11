@@ -263,7 +263,7 @@ See [Langfuse's OpenTelemetry guide](https://langfuse.com/integrations/native/op
 ## Findings
 
 A measured comparison of Jev, Clef and OpenAI (latency, accuracy, calibration) is published at
-<https://vilinski.dev/jev-benchmark/>; its scripts and raw results are in
+<https://ai.vilinski.dev/jev-benchmark/>; its scripts and raw results are in
 [`docs/benchmark`](docs/benchmark). The notes below are from everyday use against the three providers; numbers are one machine's.
 
 * **Cloudflare validates question ids.** Ids must match `^[A-Za-z0-9_.-]{1,100}$`.
