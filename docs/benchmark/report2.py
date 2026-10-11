@@ -89,7 +89,8 @@ notes=f'''<p><b>Speed.</b> Jev is the fastest and steadiest (p50 {J["lat"]["p50"
 <p><b>Caveats.</b> Synthetic, small (60 items) and easy: yes/no and routing sit near the ceiling, and a single item changes a percentage by 2 points. Only 3 repeats. Latency is from the <code>jev</code> CLI with a fresh TLS connection per call, with the three providers run back to back in one session, each as one block of 180 calls rather than interleaved, so time-of-day effects can still differ between them. The OpenAI result depends on the prompt that <code>jev</code> writes for it and on the model (<code>gpt-4.1-mini</code>); other models would score differently. Severity labels are the author's own judgement.</p>'''
 
 # SEO: regenerated with every report. Set REPORT_URL (e.g. https://example.com/jev-benchmark/) to emit the
-# canonical/og:url tags, robots.txt and sitemap.xml; without it only URL-independent tags are written.
+# canonical/og:url tags; add REPORT_SITE_FILES=1 to also write robots.txt/sitemap.xml (only if the report is the site root;
+# on a sub-path add the URL to the host's own sitemap instead).
 import os
 TITLE="Jev vs Clef vs OpenAI: decision API benchmark (latency, accuracy, calibration)"
 NCALLS=R[names[0]]["n"]
@@ -101,17 +102,20 @@ seo=[f'<meta name="description" content="{esc(DESC)}">','<meta name="robots" con
      '<meta property="og:type" content="article">',f'<meta property="og:title" content="{esc(TITLE)}">',
      f'<meta property="og:description" content="{esc(DESC)}">','<meta name="twitter:card" content="summary">',
      f'<meta name="twitter:title" content="{esc(TITLE)}">',f'<meta name="twitter:description" content="{esc(DESC)}">',
-     '<meta name="color-scheme" content="light dark">']
+     '<meta name="color-scheme" content="light dark">','<meta name="author" content="Andreas Vilinski">',
+     '<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%278%27 fill=%27%234f46e5%27/%3E%3Ctext x=%2716%27 y=%2722%27 font-family=%27system-ui,sans-serif%27 font-size=%2713%27 font-weight=%27900%27 fill=%27white%27 text-anchor=%27middle%27%3Ejev%3C/text%3E%3C/svg%3E">']
 ld={"@context":"https://schema.org","@type":"TechArticle","headline":TITLE,"description":DESC,
     "datePublished":now,"dateModified":now,"inLanguage":"en","author":{"@type":"Person","name":"Andreas Vilinski"},
     "about":["decision models","LLM evaluation","latency","calibration"],
     "isBasedOn":{"@type":"SoftwareSourceCode","name":"jev","codeRepository":REPO,"programmingLanguage":"Rust","license":"https://spdx.org/licenses/MIT.html"},
     "citation":REPO}
-open("robots.txt","w").write("User-agent: *\nAllow: /\n"+(f"Sitemap: {URL.rstrip('/')}/sitemap.xml\n" if URL else ""))
+SITE_FILES=os.environ.get("REPORT_SITE_FILES")=="1"   # only when the report is the site root
+if SITE_FILES:
+    open("robots.txt","w").write("User-agent: *\nAllow: /\n"+(f"Sitemap: {URL.rstrip('/')}/sitemap.xml\n" if URL else ""))
 if URL:
     seo+= [f'<link rel="canonical" href="{esc(URL)}">',f'<meta property="og:url" content="{esc(URL)}">']
     ld["mainEntityOfPage"]=URL
-    open("sitemap.xml","w").write(f'<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>{esc(URL)}</loc><lastmod>{now}</lastmod></url></urlset>\n')
+    if SITE_FILES: open("sitemap.xml","w").write(f'<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>{esc(URL)}</loc><lastmod>{now}</lastmod></url></urlset>\n')
 seo.append('<script type="application/ld+json">'+json.dumps(ld)+'</script>')
 SEO="\n".join(seo)
 HTML=f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{esc(TITLE)}</title>

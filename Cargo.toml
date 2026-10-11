@@ -8,7 +8,7 @@ categories = ["command-line-utilities", "development-tools"]
 license = "MIT OR Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/vilinski/jev"
-homepage = "https://github.com/vilinski/jev"
+homepage = "https://vilinski.dev/jev-benchmark/"
 
 [dependencies]
 base64 = "0.23"
