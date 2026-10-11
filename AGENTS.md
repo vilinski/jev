@@ -81,6 +81,11 @@ After every regeneration keep the SEO state current:
   `sitemap.xml` entry for it needs its `lastmod` bumped to the deploy date; its root
   `robots.txt` already points to that sitemap. `robots.txt`/`sitemap.xml` from the
   generator (`REPORT_SITE_FILES=1`) are only for a report hosted at a site root.
+- `report2.py` also draws `og.svg` and rasterizes it to `og.png` (1200x630, macOS `sips`;
+  elsewhere an existing `og.png` is reused). Deploy `og.png` next to `index.html`. The
+  `og:`/`twitter:` title and description are deliberately short (about 45 and 100 chars)
+  because LinkedIn, X and Bluesky cut longer text; `<title>` and the meta description stay long.
+- The byline and JSON-LD `author` link to the profile at https://andreas.vilinski.dev/.
 - Re-read the hand-written conclusions in `report2.py` against the new numbers before
   deploying; they are not all computed.
 - Keep the README link to the report and the GitHub repo homepage pointing at it.

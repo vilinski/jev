@@ -88,6 +88,31 @@ notes=f'''<p><b>Speed.</b> Jev is the fastest and steadiest (p50 {J["lat"]["p50"
 <p><b>Cost.</b> Not measured in money. Jev and Clef answer all questions of a request in one call. OpenAI makes one request per question, so a batch of N questions costs N requests (fast in parallel, not cheaper).</p>
 <p><b>Caveats.</b> Synthetic, small (60 items) and easy: yes/no and routing sit near the ceiling, and a single item changes a percentage by 2 points. Only 3 repeats. Latency is from the <code>jev</code> CLI with a fresh TLS connection per call, with the three providers run back to back in one session, each as one block of 180 calls rather than interleaved, so time-of-day effects can still differ between them. The OpenAI result depends on the prompt that <code>jev</code> writes for it and on the model (<code>gpt-4.1-mini</code>); other models would score differently. Severity labels are the author's own judgement.</p>'''
 
+# Social preview (og:image): drawn from the same numbers, so it is regenerated with every report.
+import os, subprocess, shutil
+def og_image():
+    W,H=1200,630; rows=""
+    for i,n in enumerate(names):
+        y=300+i*96; col=COL[n]; p50=R[n]["lat"]["p50"]*1000; acc=R[n]["acc_all"]
+        rows+=(f'<text x="64" y="{y+34}" font-size="34" font-weight="700" fill="#f4f4f5">{esc(short[n])}</text>'
+               f'<rect x="250" y="{y}" width="{520*p50/max(R[m]["lat"]["p50"]*1000 for m in names)*0.86:.0f}" height="30" rx="6" fill="{col}"/>'
+               f'<text x="{250+520*p50/max(R[m]["lat"]["p50"]*1000 for m in names)*0.86+14:.0f}" y="{y+25}" font-size="26" fill="#d4d4d8">{p50:.0f} ms median</text>'
+               f'<rect x="250" y="{y+38}" width="{520*acc*0.86:.0f}" height="14" rx="4" fill="{col}" opacity=".45"/>'
+               f'<text x="{250+520*acc*0.86+14:.0f}" y="{y+52}" font-size="22" fill="#a1a1aa">{acc:.0%} accurate</text>')
+    svg=(f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}" font-family="Helvetica, Arial, sans-serif">'
+         f'<rect width="{W}" height="{H}" fill="#16171a"/><rect width="{W}" height="8" fill="#4f46e5"/>'
+         f'<text x="64" y="104" font-size="30" fill="#818cf8" font-weight="700" letter-spacing="2">DECISION API BENCHMARK</text>'
+         f'<text x="64" y="176" font-size="64" font-weight="800" fill="#ffffff">Jev vs Clef vs OpenAI</text>'
+         f'<text x="64" y="232" font-size="30" fill="#a1a1aa">{R[names[0]]['n']*len(names)} measured calls: speed, accuracy, calibration</text>'
+         f'{rows}'
+         f'<text x="64" y="598" font-size="26" fill="#71717a">measured with the jev CLI · {now}</text></svg>')
+    open("og.svg","w").write(svg)
+    # macOS: sips rasterizes SVG at its declared size. Elsewhere an existing og.png is reused, if any.
+    if sys.platform=="darwin" and shutil.which("sips"):
+        subprocess.run(["sips","-s","format","png","og.svg","--out","og.png"],capture_output=True,timeout=60)
+    return os.path.exists("og.png")
+    return os.path.exists("og.png")
+
 # SEO: regenerated with every report. Set REPORT_URL (e.g. https://example.com/jev-benchmark/) to emit the
 # canonical/og:url tags; add REPORT_SITE_FILES=1 to also write robots.txt/sitemap.xml (only if the report is the site root;
 # on a sub-path add the URL to the host's own sitemap instead).
@@ -96,20 +121,33 @@ TITLE="Jev vs Clef vs OpenAI: decision API benchmark (latency, accuracy, calibra
 NCALLS=R[names[0]]["n"]
 DESC=(f"Measured comparison of TypeSafe Jev, Cloudflare Clef and OpenAI gpt-4.1-mini as typed decision models: "
       f"latency, accuracy and calibration over {NCALLS} calls per model, run through the jev CLI on {now}.")
+# Cards on LinkedIn/X/Bluesky cut long text: keep og/twitter text short, the page <title>/description long for search.
+SOCIAL_TITLE="Jev vs Clef vs OpenAI: decision API benchmark"
+SOCIAL_DESC=f"{R[names[0]]['n']*len(names)} calls, three decision models: speed, accuracy and calibration, measured with the jev CLI."
 URL=os.environ.get("REPORT_URL","").strip()
 REPO="https://github.com/vilinski/jev"
+PROFILE="https://andreas.vilinski.dev/"
 seo=[f'<meta name="description" content="{esc(DESC)}">','<meta name="robots" content="index,follow">',
-     '<meta property="og:type" content="article">',f'<meta property="og:title" content="{esc(TITLE)}">',
-     f'<meta property="og:description" content="{esc(DESC)}">','<meta name="twitter:card" content="summary">',
-     f'<meta name="twitter:title" content="{esc(TITLE)}">',f'<meta name="twitter:description" content="{esc(DESC)}">',
+     '<meta property="og:type" content="article">',f'<meta property="og:title" content="{esc(SOCIAL_TITLE)}">',
+     f'<meta property="og:description" content="{esc(SOCIAL_DESC)}">','<meta name="twitter:card" content="summary">',
+     f'<meta name="twitter:title" content="{esc(SOCIAL_TITLE)}">',f'<meta name="twitter:description" content="{esc(SOCIAL_DESC)}">',
      '<meta name="color-scheme" content="light dark">','<meta name="author" content="Andreas Vilinski">',
      '<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%278%27 fill=%27%234f46e5%27/%3E%3Ctext x=%2716%27 y=%2722%27 font-family=%27system-ui,sans-serif%27 font-size=%2713%27 font-weight=%27900%27 fill=%27white%27 text-anchor=%27middle%27%3Ejev%3C/text%3E%3C/svg%3E">']
 ld={"@context":"https://schema.org","@type":"TechArticle","headline":TITLE,"description":DESC,
-    "datePublished":now,"dateModified":now,"inLanguage":"en","author":{"@type":"Person","name":"Andreas Vilinski"},
+    "datePublished":now,"dateModified":now,"inLanguage":"en","author":{"@type":"Person","name":"Andreas Vilinski","url":PROFILE,"sameAs":["https://www.linkedin.com/in/andreas-vilinski/","https://github.com/vilinski"]},
     "about":["decision models","LLM evaluation","latency","calibration"],
     "isBasedOn":{"@type":"SoftwareSourceCode","name":"jev","codeRepository":REPO,"programmingLanguage":"Rust","license":"https://spdx.org/licenses/MIT.html"},
     "citation":REPO}
 SITE_FILES=os.environ.get("REPORT_SITE_FILES")=="1"   # only when the report is the site root
+HAS_OG=og_image()
+if URL and HAS_OG:
+    IMG=URL.rstrip("/")+"/og.png"; ALT="Bar chart: median latency and accuracy of Jev, Clef and OpenAI"
+    seo=[t for t in seo if 'twitter:card' not in t]
+    seo+=['<meta name="twitter:card" content="summary_large_image">',f'<meta property="og:image" content="{esc(IMG)}">',
+          '<meta property="og:image:type" content="image/png">','<meta property="og:image:width" content="1200">',
+          '<meta property="og:image:height" content="630">',f'<meta property="og:image:alt" content="{esc(ALT)}">',
+          f'<meta name="twitter:image" content="{esc(IMG)}">',f'<meta name="twitter:image:alt" content="{esc(ALT)}">']
+    ld["image"]=IMG
 if SITE_FILES:
     open("robots.txt","w").write("User-agent: *\nAllow: /\n"+(f"Sitemap: {URL.rstrip('/')}/sitemap.xml\n" if URL else ""))
 if URL:
@@ -135,7 +173,7 @@ table{{width:100%;border-collapse:collapse;background:var(--card);border:1px sol
 a{{color:inherit}} td.bad{{background:var(--bad)}} td.good{{background:var(--good)}} .tw{{overflow-x:auto}} .note{{background:var(--card);border-left:4px solid #999;padding:4px 16px;border-radius:4px}}
 </style></head><body><main>
 <h1>Decision API benchmark: Jev vs Clef vs OpenAI</h1>
-<p class="sub">{now} · 180 calls per model (60 synthetic labelled items × 3 runs) · via the <a href="{REPO}"><code>jev</code> CLI</a>, one question per call · OpenAI = gpt-4.1-mini read through token log-probabilities</p>
+<p class="sub">{now} · by <a rel="author" href="{PROFILE}">Andreas Vilinski</a> · 180 calls per model (60 synthetic labelled items × 3 runs) · via the <a href="{REPO}"><code>jev</code> CLI</a>, one question per call · OpenAI = gpt-4.1-mini read through token log-probabilities</p>
 <div class="key">{"".join(f'<span><i style="background:{COL[n]}"></i>{esc(n)}</span>' for n in names)}</div>
 <h2>Speed</h2><div class="grid2">{"".join(charts[:5])}</div>
 <h2>Accuracy</h2><div class="grid2">{"".join(charts[5:9])}</div>
