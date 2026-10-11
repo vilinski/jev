@@ -1,0 +1,62 @@
+# AGENTS.md
+
+Guidance for AI coding agents (and humans) working on `jev`.
+
+## What this is
+
+`jev` is a single-binary Rust CLI that sends *state* plus typed *questions*
+(`noul`, `choice`, `score`) to a System One decision model and prints the typed
+answers as JSON. Providers: TypeSafe Jev (default), Cloudflare Clef, local Ollama,
+and OpenAI chat models read through token log-probabilities. All providers take the
+same request and print the same `answers` shape. See [README.md](README.md).
+
+## Layout
+
+| Path | Purpose |
+|---|---|
+| `src/main.rs` | clap CLI, subcommands, state resolution, output |
+| `src/api.rs` | HTTP client: retries with backoff, envelope unwrapping, redaction, spans |
+| `src/provider.rs` | Per-provider URLs, model checks, header names, credential slots |
+| `src/openai.rs` | OpenAI adapter: one logprobs chat completion per question |
+| `src/key.rs` | Keychain / environment credential loading, `Secret` redaction |
+| `src/telemetry.rs` | Optional OpenTelemetry export (Langfuse or generic OTLP/HTTP) |
+| `tests/providers.rs` | Runs the real binary against a local one-shot HTTP server |
+| `tests/telemetry.rs` | Wire-level checks of export, content capture, retries, exit codes |
+| `skill/SKILL.md` | The Claude Code skill that teaches agents to call `jev` |
+| `docs/benchmark/` | One-off provider comparison scripts and results |
+
+## Commands
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --all-targets --locked     # lints are configured in Cargo.toml and deny on warnings
+cargo test --locked
+```
+
+CI (`.github/workflows/ci.yml`) runs exactly these, so run them before pushing.
+
+## Conventions
+
+- **Strict lints.** `clippy::pedantic` and `nursery` are denied, `unsafe_code` is
+  denied and `missing_docs` is denied. Document every item, including private ones
+  where the lint asks. Do not add `#[allow]` without a reason in a comment.
+- **Never leak credentials.** Secrets come from the keychain or an environment
+  variable and live in `key::Secret`, which redacts itself in `Debug`. Anything
+  captured for telemetry or an error message goes through `Client::redact`. Do not
+  print, log or span-record raw request headers or URLs.
+- **Same output for every provider.** A new provider must produce the existing
+  `answers` shape; translate in the adapter, not in `main.rs`.
+- **Telemetry never changes the result.** Export failures are reported on stderr
+  and must not alter the model answer or the exit status. Content capture is opt-in
+  (`--telemetry-content`).
+- **No network in tests.** Tests talk to local mock servers on `127.0.0.1`. Mock
+  servers need blocking accepted streams (`set_nonblocking(false)`), because macOS
+  sockets inherit the listener's non-blocking mode.
+- **Skill and README stay in sync.** When a flag, provider or credential changes,
+  update `README.md` and `skill/SKILL.md` in the same change.
+
+## Calling the model from an agent
+
+Use the `jev` CLI, never the vendor API directly, and batch independent questions
+into one `jev run` request. Read `probabilities`, not just the headline value. The
+details are in [skill/SKILL.md](skill/SKILL.md).

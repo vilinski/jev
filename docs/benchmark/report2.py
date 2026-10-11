@@ -1,0 +1,115 @@
+exec(open("an.py").read())
+import math, html, datetime
+names=list(R); short={"Jev":"Jev","Clef":"Clef","OpenAI gpt-4.1-mini":"OpenAI"}
+def esc(s): return html.escape(str(s))
+def bars(title,sub,vals,fmt,better,maxv=None,pairs=None):
+    """vals: {name: value}; pairs: {name:(a,b)} for two-bar groups. Horizontal bars, one SVG."""
+    W=420; lab=64; right=64; rowh=26 if not pairs else 40
+    mv=maxv or max((max(v) if pairs else v) for v in (pairs or vals).values())*1.08 or 1
+    rows=""
+    for i,n in enumerate(names):
+        y=8+i*(rowh+10)
+        rows+=f'<text x="0" y="{y+rowh/2+4}" class="lbl">{esc(short[n])}</text>'
+        vs=pairs[n] if pairs else (vals[n],)
+        for j,v in enumerate(vs):
+            h=(rowh-4)/len(vs); w=max((W-lab-right)*v/mv,1)
+            op=1 if j==0 else .38
+            rows+=f'<rect x="{lab}" y="{y+j*(h+2):.1f}" width="{w:.1f}" height="{h:.1f}" rx="3" fill="{COL[n]}" opacity="{op}"/><text x="{lab+w+5:.1f}" y="{y+j*(h+2)+h/2+4:.1f}" class="val">{fmt(v)}</text>'
+    H=8+len(names)*(rowh+10)
+    hint={"low":"lower is better","high":"higher is better",None:""}[better]
+    legend='<span class="lg">solid = right, faded = wrong</span>' if pairs else ""
+    return f'<section class="card"><h3>{esc(title)}</h3><p class="sub">{sub} <span class="dir">{hint}</span> {legend}</p><svg viewBox="0 0 {W} {H}" width="100%" role="img" aria-label="{esc(title)}">{rows}</svg></section>'
+def strip():
+    W=900; lab=70; top=24; rowh=70
+    lo,hi=0.3,5.0; X=lambda v: lab+(W-lab-20)*(math.log(v)-math.log(lo))/(math.log(hi)-math.log(lo))
+    g=""
+    for t in (0.3,0.5,1,2,3,5):
+        g+=f'<line x1="{X(t):.1f}" x2="{X(t):.1f}" y1="{top-6}" y2="{top+rowh*len(names)}" class="grid"/><text x="{X(t):.1f}" y="{top+rowh*len(names)+16}" class="tick" text-anchor="middle">{t:g} s</text>'
+    for i,n in enumerate(names):
+        cy=top+i*rowh+rowh/2; o=R[n]["lat"]
+        g+=f'<text x="0" y="{cy+4}" class="lbl">{esc(short[n])}</text>'
+        for k,v in enumerate(o["all"]):
+            jy=((k*37)%21-10)*1.4   # deterministic vertical jitter
+            g+=f'<circle cx="{X(v):.1f}" cy="{cy+jy:.1f}" r="3" fill="{COL[n]}" opacity=".45"/>'
+        for key,lbl,dy in (("p50","p50",-26),("p95","p95",-26)):
+            x=X(o[key]); g+=f'<line x1="{x:.1f}" x2="{x:.1f}" y1="{cy-24}" y2="{cy+24}" stroke="{COL[n]}" stroke-width="2.5"/><text x="{x+4:.1f}" y="{cy+dy+4}" class="mk" fill="{COL[n]}">{lbl} {o[key]*1000:.0f} ms</text>'
+        if o["mx"]>1.2:
+            x=X(o["mx"]); g+=f'<text x="{x:.1f}" y="{cy+34}" class="mk" text-anchor="middle" fill="{COL[n]}">max {o["mx"]:.1f} s</text>'
+    H=top+rowh*len(names)+26
+    return f'<section class="card wide"><h3>Latency of every call</h3><p class="sub">Each dot is one of the 180 calls per model (log axis, so the fast cluster is spread out and slow outliers stay visible). Bars mark p50 and p95. <span class="dir">further left is better</span></p><svg viewBox="0 0 {W} {H}" width="100%" role="img" aria-label="Latency strip plot">{g}</svg></section>'
+pc=lambda v:f"{v:.0%}"
+d=lambda f:{n:f(R[n]) for n in names}
+ms=lambda v:f"{v*1000:.0f} ms"
+charts=[]
+charts.append(strip())
+charts.append(bars("Latency p50","median single call, incl. process start + TLS",d(lambda o:o["lat"]["p50"]),ms,"low"))
+charts.append(bars("Latency p95","slowest 5% of calls",d(lambda o:o["lat"]["p95"]),ms,"low"))
+charts.append(bars("10 questions, one request","all questions about one state; OpenAI runs them as 10 parallel calls",d(lambda o:o["batch"]),ms,"low"))
+charts.append(bars("10 questions, 10 calls in sequence","what you pay if you do not batch",d(lambda o:o["sep"]),lambda v:f"{v:.1f} s","low"))
+charts.append(bars("Accuracy: yes/no","24 items × 3 runs, vague items excluded",d(lambda o:o["acc"]["noul"][0]),pc,"high",1))
+charts.append(bars("Accuracy: routing","20 items × 3 runs, 6 options incl. “unclear”",d(lambda o:o["acc"]["choice"][0]),pc,"high",1))
+charts.append(bars("Accuracy: severity (exact level)","16 items × 3 runs, 4 levels",d(lambda o:o["acc"]["score_exact"][0]),pc,"high",1))
+charts.append(bars("Severity error","mean distance to the labelled level, in levels",d(lambda o:o["mae"]),lambda v:f"{v:.2f}","low"))
+charts.append(bars("Calibration: yes/no (Brier)","squared error of the probability",d(lambda o:o["brier"]["noul"]),lambda v:f"{v:.3f}","low"))
+charts.append(bars("Calibration: routing (Brier)","squared error over all options",d(lambda o:o["brier"]["choice"]),lambda v:f"{v:.3f}","low"))
+charts.append(bars("Confidence when right vs wrong","a useful confidence is clearly lower when wrong","",lambda v:f"{v:.2f}","high",1,pairs={n:(R[n]["conf_ok"],R[n]["conf_bad"]) for n in names}))
+charts.append(bars("Accuracy when confidence ≥ 0.8","how far you can trust a confident answer",d(lambda o:o["hi"][0]),pc,"high",1))
+charts.append(bars("Accuracy when confidence < 0.8","a good model is worse here, so these can go to a human",d(lambda o:o["lo"][0]),pc,"low",1))
+charts.append(bars("Says “can’t tell” on vague input","share of 4 vague yes/no items answered 0.25–0.75",d(lambda o:o["amb_abstain"]),pc,"high",1))
+charts.append(bars("Decision flips between runs","items whose decision changed across 3 runs",d(lambda o:o["flip"]),pc,"low",None))
+charts.append(bars("Input tokens per call","as reported by the provider; sizes are not comparable across tokenizers",d(lambda o:o["tok"][0]),lambda v:f"{v:.0f}",None))
+# tables
+def tr(l,f,hint=""): return f'<tr><td>{l}<div class="hint">{hint}</div></td>'+"".join(f'<td>{f(R[n])}</td>' for n in names)+'</tr>'
+th="".join(f'<th style="color:{COL[n]}">{esc(short[n])}</th>' for n in names)
+tbl=(tr("Failed calls",lambda o:f'{o["err"]} / {o["n"]}')+tr("Overall accuracy",lambda o:f'{o["acc_all"]:.1%}')
+ +tr("Severity within ±¾ level",lambda o:pc(o["acc"]["score_pm1"][0]))+tr("Latency max",lambda o:ms(o["lat"]["mx"]))
+ +tr("Run-to-run std dev",lambda o:f'{o["sd"]:.3f}')+tr("Output tokens per call",lambda o:f'{o["tok"][1]:.0f}')
+ +tr("Items answered with conf ≥ 0.8",lambda o:f'{o["hi"][1]} of {o["hi"][1]+o["lo"][1]}'))
+def label(i): return {"n":N,"c":C,"s":S}[i[0]][int(i[1:])]
+from collections import Counter
+def pred(a,kind):
+    return ("yes" if a["noul"]>.5 else "no")+f" ({a['noul']:.2f})" if kind=="noul" else (f"{a['choice']} ({a['confidence']:.2f})" if kind=="choice" else f"L{max(a['probabilities'],key=a['probabilities'].get)} · {a['score']:.2f}")
+def maj(v,kind):
+    dec=[(a["noul"]>.5) if kind=="noul" else a["choice"] if kind=="choice" else int(max(a["probabilities"],key=a["probabilities"].get)) for x,a in v]
+    return Counter(dec).most_common(1)[0][0]
+trs=[]
+for i in R[names[0]]["byid"]:
+    kind={"n":"noul","c":"choice","s":"score"}[i[0]]; it=label(i); gold=it[-1]
+    if gold is None: continue
+    ms_=[maj(R[n]["byid"][i],kind) for n in names]; wrong=[m!=gold for m in ms_]
+    if any(wrong):
+        cells="".join(f'<td class="{"bad" if w else "good"}">{esc(pred(R[n]["byid"][i][0][1],kind))}</td>' for n,w in zip(names,wrong))
+        trs.append(f'<tr><td>{esc(it[0])}</td><td>{esc(gold)}</td>{cells}</tr>')
+J,Cl,O=(R[n] for n in names)
+now=datetime.date.today().isoformat()
+notes=f'''<p><b>Speed.</b> Jev is the fastest and steadiest (p50 {J["lat"]["p50"]*1000:.0f} ms, p95 {J["lat"]["p95"]*1000:.0f} ms). Clef has similar typical speed but a long tail (p95 {Cl["lat"]["p95"]*1000:.0f} ms, one call {Cl["lat"]["mx"]:.1f} s). OpenAI is the slowest typically ({O["lat"]["p50"]*1000:.0f} ms) but has no tail beyond {O["lat"]["mx"]:.1f} s.</p>
+<p><b>Accuracy.</b> All three are close (overall {J["acc_all"]:.0%} Jev, {Cl["acc_all"]:.0%} Clef, {O["acc_all"]:.0%} OpenAI) and the differences come from a handful of items, see the list below. Jev is flawless on yes/no and routing but weakest on severity; Clef is best on severity; OpenAI got one routing answer wrong in one of three runs, the only decision flip of the whole benchmark.</p>
+<p><b>Calibration is where they differ.</b> OpenAI’s log-probabilities are sharp: it is the best on yes/no (Brier {O["brier"]["noul"]:.4f}) but its confidence is {O["conf_bad"]:.2f} when wrong versus {O["conf_ok"]:.2f} when right, so confidence does not flag its mistakes. Jev is lower when wrong ({J["conf_bad"]:.2f} vs {J["conf_ok"]:.2f}) and flags every vague input as uncertain, which OpenAI and Clef do on only {O["amb_abstain"]:.0%} of them. Clef has the weakest Brier scores.</p>
+<p><b>Cost.</b> Not measured in money. Jev and Clef answer all questions of a request in one call. OpenAI makes one request per question, so a batch of N questions costs N requests (fast in parallel, not cheaper).</p>
+<p><b>Caveats.</b> Synthetic, small (60 items) and easy: yes/no and routing sit near the ceiling, and a single item changes a percentage by 2 points. Only 3 repeats. Latency is from the <code>jev</code> CLI with a fresh TLS connection per call, at different times of day for OpenAI and the others (Jev and Clef ran together earlier). The OpenAI result depends on the prompt that <code>jev</code> writes for it and on the model (<code>gpt-4.1-mini</code>); other models would score differently. Severity labels are my own judgement.</p>'''
+HTML=f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Decision API benchmark</title>
+<style>
+:root{{--bg:#fafaf7;--fg:#1b1b1b;--mut:#666;--card:#fff;--line:#e3e1da;--bad:#fbe3e0;--good:#e3f4e6}}
+@media(prefers-color-scheme:dark){{:root{{--bg:#16171a;--fg:#ececec;--mut:#9a9a9a;--card:#1f2024;--line:#33353a;--bad:#4a2522;--good:#1f3a25}}}}
+body{{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,sans-serif}} main{{max-width:1040px;margin:0 auto;padding:24px 16px 64px}}
+h1{{font-size:28px;margin:0}} h2{{margin-top:36px;font-size:20px}} h3{{margin:0 0 2px;font-size:15px}}
+.sub,.hint,small{{color:var(--mut);font-size:12.5px;font-weight:400}} .sub{{margin:0 0 8px}} .dir{{font-weight:600}} .lg{{display:block}}
+.grid2{{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px}} .wide{{grid-column:1/-1}}
+.card{{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px}}
+svg text{{fill:var(--fg)}} .lbl{{font-size:12.5px;font-weight:600}} .val{{font-size:12px;fill:var(--mut)}} .tick{{font-size:11px;fill:var(--mut)}} .mk{{font-size:11px;font-weight:600}} svg .mk{{fill:currentColor}}
+.grid{{stroke:var(--line);stroke-width:1}}
+.key{{display:flex;gap:16px;margin:10px 0;font-weight:600}} .key i{{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:6px}}
+table{{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--line)}} th,td{{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top;font-size:14px}}
+td.bad{{background:var(--bad)}} td.good{{background:var(--good)}} .tw{{overflow-x:auto}} .note{{background:var(--card);border-left:4px solid #999;padding:4px 16px;border-radius:4px}}
+</style></head><body><main>
+<h1>Decision API benchmark: Jev vs Clef vs OpenAI</h1>
+<p class="sub">{now} · 180 calls per model (60 synthetic labelled items × 3 runs) · via the <code>jev</code> CLI, one question per call · OpenAI = gpt-4.1-mini read through token log-probabilities</p>
+<div class="key">{"".join(f'<span><i style="background:{COL[n]}"></i>{esc(n)}</span>' for n in names)}</div>
+<h2>Speed</h2><div class="grid2">{"".join(charts[:5])}</div>
+<h2>Accuracy</h2><div class="grid2">{"".join(charts[5:9])}</div>
+<h2>Calibration and trust</h2><div class="grid2">{"".join(charts[9:])}</div>
+<h2>More numbers</h2><div class="tw"><table><tr><th>Metric</th>{th}</tr>{tbl}</table></div>
+<h2>Items where a model was wrong (majority of 3 runs)</h2><div class="tw"><table><tr><th>Text</th><th>Gold</th>{th}</tr>{"".join(trs)}</table></div>
+<h2>Reading the results</h2><div class="note">{notes}</div>
+</main></body></html>'''
+open("report.html","w").write(HTML)
