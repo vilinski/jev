@@ -1,0 +1,61 @@
+# Benchmark of the decision providers: `mise run bench` reruns everything (costs a few cents, takes about 25 min:
+# the own set, then 1,100 sequential calls per provider on the public sample).
+# Needs `jev` on PATH with a stored key for each provider (`jev login --provider <name>`).
+
+[tools]
+python = "3.14"
+
+[env]
+# Test items per jev-bench dataset (22 datasets). 50 gives 1,100 items and a 95% interval of about ±2.5 points.
+JEVBENCH_PER = "50"
+# provider:result-name pairs, one place for every task
+PROVIDERS = "typesafe:jev celeris:celeris cloudflare:clef openai:openai openai-chat:openaichat"   # keep in sync with docs/benchmark/models.py
+
+[tasks."bench:own"]
+description = "Run the 60-item own set (3 repeats) against every provider, in parallel"
+dir = "docs/benchmark"
+run = '''
+mkdir -p results
+for pair in $PROVIDERS; do
+  python3 run.py "${pair%%:*}" 3 "results/${pair##*:}.json" > "results/${pair##*:}.log" 2>&1 &
+done
+wait
+'''
+
+[tasks."bench:fetch"]
+description = "Download the public jev-bench test splits once (parallel, atomic)"
+dir = "docs/benchmark"
+run = "python3 fetch_jevbench.py"
+
+[tasks."bench:public"]
+wait_for = ["bench:own"]   # run after the own set so the two do not compete for CPU and sockets and distort latency
+depends = ["bench:fetch"]
+description = "Run a seeded sample of the public jev-bench ($JEVBENCH_PER items per dataset) against every provider, in parallel"
+dir = "docs/benchmark"
+run = '''
+mkdir -p results
+for pair in $PROVIDERS; do
+  python3 run_hf.py "${pair%%:*}" "results/hf_${pair##*:}.json" > "results/hf_${pair##*:}.log" 2>&1 &
+done
+wait
+'''
+
+[tasks."bench:report"]
+description = "Rebuild report.html, og.png and data.json from results/ (no network)"
+dir = "docs/benchmark"
+run = "python3 report.py"
+
+[tasks."bench:site"]
+description = "Build the ai.vilinski.dev tree in docs/benchmark/site (needs the current coding-agents page and template)"
+dir = "docs/benchmark"
+depends = ["bench:report"]
+run = '''
+curl -fsS https://ai.vilinski.dev/coding-agents/ -o /tmp/coding-agents-live.html
+python3 site.py /tmp/coding-agents-live.html "${CODING_TEMPLATE:-$HOME/Projects/vilinski-hetzner/ai-graph/template.html}"
+'''
+
+[tasks.bench]
+description = "Full rerun: own set + public sample for all providers, then report and site"
+depends = ["bench:own", "bench:public"]
+depends_post = ["bench:site"]
+run = "echo 'results in docs/benchmark/results, site in docs/benchmark/site; upload only after review'"

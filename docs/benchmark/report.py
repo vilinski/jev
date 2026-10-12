@@ -1,161 +1,140 @@
-import json, statistics as st, re, html, datetime, sys
-from dataset import *
-P = {"Jev (TypeSafe)":"jev.json","Clef (Cloudflare)":"clef.json"}
-COL = {"Jev (TypeSafe)":"#2f6fed","Clef (Cloudflare)":"#e8710a"}
-def pct(v,q):
-    v=sorted(v); k=(len(v)-1)*q; f=int(k); c=min(f+1,len(v)-1); return v[f]+(v[c]-v[f])*(k-f)
-def main(r):
-    out={}
-    rows=r["rows"]; ok=[x for x in rows if x["ok"]]
-    lat=[x["dt"] for x in ok]
-    out["n"]=len(rows); out["err"]=len(rows)-len(ok)
-    out["lat"]=dict(p50=pct(lat,.5),p95=pct(lat,.95),mean=st.mean(lat),mx=max(lat),min=min(lat),all=lat)
-    tin=tout=0
-    for x in ok:
-        m=re.match(r"(\d+) in / (\d+) out",x["usage"] or "")
-        if m: tin+=int(m[1]); tout+=int(m[2])
-    out["tok"]=(tin/len(ok),tout/len(ok))
-    acc={}; brier={"noul":[],"choice":[]}; conf_ok=[]; conf_bad=[]; sel=[]; amb=[]; mae=[]; 
-    kinds={"noul":[], "choice":[], "score_exact":[], "score_pm1":[]}
-    byid={}
-    for x in ok:
-        a=x["res"]["q"]; byid.setdefault(x["id"],[]).append((x,a))
-        k=x["kind"]; g=x["gold"]
-        if k=="noul":
-            p=a["noul"]
-            if g is None: amb.append(abs(p-.5)); continue
-            hit=(p>.5)==g; kinds["noul"].append(hit)
-            brier["noul"].append((p-(1 if g else 0))**2)
-            c=max(p,1-p); (conf_ok if hit else conf_bad).append(c); sel.append((c,hit))
-        elif k=="choice":
-            pr=a["probabilities"]; hit=a["choice"]==g; kinds["choice"].append(hit)
-            brier["choice"].append(sum((pr.get(o,0)-(1 if o==g else 0))**2 for o in set(pr)|{g}))
-            c=a["confidence"]; (conf_ok if hit else conf_bad).append(c); sel.append((c,hit))
-        else:
-            pr=a["probabilities"]; top=max(pr,key=pr.get); hit=int(top)==g
-            kinds["score_exact"].append(hit); kinds["score_pm1"].append(abs(a["score"]-g)<=0.75)
-            mae.append(abs(a["score"]-g))
-            c=a["confidence"]; (conf_ok if hit else conf_bad).append(c); sel.append((c,hit))
-    out["acc"]={k:(sum(v)/len(v),len(v)) for k,v in kinds.items()}
-    allh=[h for _,h in sel]; out["acc_all"]=sum(allh)/len(allh)
-    out["brier"]={k:st.mean(v) for k,v in brier.items()}
-    out["mae"]=st.mean(mae)
-    out["conf_ok"]=st.mean(conf_ok); out["conf_bad"]=st.mean(conf_bad)
-    hi=[h for c,h in sel if c>=.8]; lo=[h for c,h in sel if c<.8]
-    out["hi"]=(sum(hi)/len(hi) if hi else 0,len(hi)); out["lo"]=(sum(lo)/len(lo) if lo else 0,len(lo))
-    out["amb_dist"]=st.mean(amb); out["amb_abstain"]=sum(d<.25 for d in amb)/len(amb)  # p within .25..0.75
-    # stability
-    sd=[];flip=[]
-    for i,v in byid.items():
-        x0=v[0][0]
-        if len(v)<2: continue
-        vals=[ (a["noul"] if x["kind"]=="noul" else a["score"] if x["kind"]=="score" else a["confidence"]) for x,a in v]
-        sd.append(st.pstdev(vals))
-        dec=[ (a["noul"]>.5) if x["kind"]=="noul" else a["choice"] if x["kind"]=="choice" else max(a["probabilities"],key=a["probabilities"].get) for x,a in v]
-        flip.append(len(set(dec))>1)
-    out["sd"]=st.mean(sd); out["flip"]=sum(flip)/len(flip)
-    out["batch"]=st.mean(r["batch"]); out["sep"]=st.mean(r["sep"])
-    # per-item answers for disagreement table
-    out["byid"]={i:v for i,v in byid.items()}
-    return out
-R={n:main(json.load(open(f))) for n,f in P.items()}
-json.dump({n:{k:v for k,v in o.items() if k!="byid"} for n,o in R.items()},open("summary.json","w"),indent=1,default=str)
-# disagreements / wrong items
-def label(i):
-    k=i[0]; n=int(i[1:])
-    return {"n":N,"c":C,"s":S}[k][n]
-def pred(a,kind):
-    return ("yes" if a["noul"]>.5 else "no")+f" ({a['noul']:.2f})" if kind=="noul" else (f"{a['choice']} ({a['confidence']:.2f})" if kind=="choice" else f"L{max(a['probabilities'],key=a['probabilities'].get)} score {a['score']:.2f}")
-def maj(v,kind):
-    from collections import Counter
-    dec=[ (a["noul"]>.5) if kind=="noul" else a["choice"] if kind=="choice" else int(max(a["probabilities"],key=a["probabilities"].get)) for x,a in v]
-    return Counter(dec).most_common(1)[0][0]
-trs=[]
-names=list(R)
-for i in R[names[0]]["byid"]:
-    kind={"n":"noul","c":"choice","s":"score"}[i[0]]; it=label(i); gold=it[-1]
-    ms=[maj(R[n]["byid"][i],kind) if i in R[n]["byid"] else None for n in names]
-    wrong=[(m!=gold) if gold is not None else False for m in ms]
-    if any(wrong):
-        txt=it[0]
-        cells="".join(f'<td class="{ "bad" if w else "good"}">{html.escape(str(pred(R[n]["byid"][i][0][1],kind)) if i in R[n]["byid"] else "–")}</td>' for n,w in zip(names,wrong))
-        trs.append(f'<tr><td>{html.escape(txt)}</td><td>{html.escape(str(gold))}</td>{cells}</tr>')
-def bar(vals,fmt="{:.0%}",mx=1.0,unit=""):
-    s=""
-    for n,v in vals:
-        s+=f'<div class="barrow"><span class="bl">{n}</span><div class="bt"><div class="bf" style="width:{min(v/mx,1)*100:.1f}%;background:{COL[n]}"></div></div><span class="bv">{fmt.format(v)}{unit}</span></div>'
-    return s
-def card(title,body,sub=""):
-    return f'<section class="card"><h3>{title}</h3><p class="sub">{sub}</p>{body}</section>'
-mxl=max(R[n]["lat"]["p95"] for n in R)
-def hist(n):
-    v=R[n]["lat"]["all"]; lo=0; hi=max(max(R[m]["lat"]["all"]) for m in R); bins=14; cnt=[0]*bins
-    for x in v: cnt[min(int(x/hi*bins),bins-1)]+=1
-    m=max(cnt) or 1; w=300/bins
-    bars="".join(f'<rect x="{i*w:.1f}" y="{80-c/m*78:.1f}" width="{w-2:.1f}" height="{c/m*78:.1f}" fill="{COL[n]}"/>' for i,c in enumerate(cnt))
-    return f'<div class="hist"><b style="color:{COL[n]}">{n}</b><svg viewBox="0 0 300 96" width="100%"><line x1="0" y1="80" x2="300" y2="80" stroke="#999"/>{bars}<text x="0" y="94" font-size="9" fill="#888">0 s</text><text x="300" y="94" font-size="9" fill="#888" text-anchor="end">{hi:.1f} s</text></svg></div>'
-rowsT=""
-def tr(label,f,hint=""):
-    return f'<tr><td>{label}<div class="hint">{hint}</div></td>'+"".join(f'<td>{f(R[n])}</td>' for n in R)+'</tr>'
-th="".join(f'<th style="color:{COL[n]}">{n}</th>' for n in R)
-table=(tr("Latency p50",lambda o:f'{o["lat"]["p50"]*1000:.0f} ms',"median single-question call, wall clock incl. TLS + process")
-+tr("Latency p95",lambda o:f'{o["lat"]["p95"]*1000:.0f} ms',"tail")
-+tr("Latency max",lambda o:f'{o["lat"]["mx"]*1000:.0f} ms')
-+tr("10 questions batched",lambda o:f'{o["batch"]*1000:.0f} ms',"one request, 10 yes/no questions")
-+tr("10 questions as 10 calls",lambda o:f'{o["sep"]*1000:.0f} ms',"sequential")
-+tr("Accuracy yes/no",lambda o:f'{o["acc"]["noul"][0]:.1%} <small>n={o["acc"]["noul"][1]}</small>',"labelled items, threshold 0.5")
-+tr("Accuracy routing",lambda o:f'{o["acc"]["choice"][0]:.1%} <small>n={o["acc"]["choice"][1]}</small>',"5 teams + &quot;unclear&quot;")
-+tr("Accuracy severity (exact level)",lambda o:f'{o["acc"]["score_exact"][0]:.1%} <small>n={o["acc"]["score_exact"][1]}</small>',"argmax of level distribution")
-+tr("Severity within ±¾ level",lambda o:f'{o["acc"]["score_pm1"][0]:.1%}')
-+tr("Severity MAE",lambda o:f'{o["mae"]:.2f} levels')
-+tr("Brier yes/no (lower better)",lambda o:f'{o["brier"]["noul"]:.3f}',"calibration + sharpness")
-+tr("Brier routing (lower better)",lambda o:f'{o["brier"]["choice"]:.3f}')
-+tr("Confidence when right",lambda o:f'{o["conf_ok"]:.2f}')
-+tr("Confidence when wrong",lambda o:f'{o["conf_bad"]:.2f}',"smaller gap to the line above = overconfident")
-+tr("Accuracy when confidence ≥ 0.8",lambda o:f'{o["hi"][0]:.1%} <small>n={o["hi"][1]}</small>')
-+tr("Accuracy when confidence &lt; 0.8",lambda o:f'{o["lo"][0]:.1%} <small>n={o["lo"][1]}</small>',"a useful model is much worse here → you can route these to a human")
-+tr("Ambiguous items → near 0.5",lambda o:f'{o["amb_abstain"]:.0%}',"share of deliberately vague yes/no items with p in 0.25–0.75")
-+tr("Run-to-run std dev",lambda o:f'{o["sd"]:.3f}',"3 repeats of each item")
-+tr("Decision flips between runs",lambda o:f'{o["flip"]:.0%}',"items whose decision changed across 3 runs")
-+tr("Failed calls",lambda o:f'{o["err"]} / {o["n"]}',"retries disabled")
-+tr("Tokens per call (in / out)",lambda o:f'{o["tok"][0]:.0f} / {o["tok"][1]:.0f}',"as reported on stderr"))
-J,Cl=R["Jev (TypeSafe)"],R["Clef (Cloudflare)"]
-kp=lambda t,v,s:f'<div class="kpi"><b>{v}</b>{t}<div class="hint">{s}</div></div>'
-kpis='<div class="kpis">'+kp("Median latency",f"{J['lat']['p50']*1000:.0f} vs {Cl['lat']['p50']*1000:.0f} ms","Jev vs Clef")+kp("Worst call",f"{J['lat']['mx']:.1f} vs {Cl['lat']['mx']:.1f} s","Jev vs Clef")+kp("Overall accuracy",f"{J['acc_all']:.0%} vs {Cl['acc_all']:.0%}","all labelled items, 3 runs")+kp("Brier yes/no",f"{J['brier']['noul']:.3f} vs {Cl['brier']['noul']:.3f}","lower is better")+'</div>'
-speed=card("Latency per call",bar([(n,R[n]["lat"]["p50"]) for n in R],"{:.2f}",mxl,"s")+bar([(n,R[n]["lat"]["p95"]) for n in R],"{:.2f}",mxl,"s"),"Top bars median, bottom bars p95. Single-question calls via the CLI, incl. process start and TLS handshake.")+card("Latency distribution","".join(hist(n) for n in R),"Histogram of all 180 calls per model.")+card("Batching: 10 questions, one state",bar([(n,R[n]["batch"]) for n in R],"{:.2f}",max(R[n]["sep"] for n in R),"s")+bar([(n,R[n]["sep"]) for n in R],"{:.2f}",max(R[n]["sep"] for n in R),"s"),"Top bars one batched request, bottom bars ten separate calls.")
-qual=card("Accuracy by task",bar([(n,R[n]["acc"]["noul"][0]) for n in R])+bar([(n,R[n]["acc"]["choice"][0]) for n in R])+bar([(n,R[n]["acc"]["score_exact"][0]) for n in R]),"Yes/no (24 items), routing (20), severity exact level (16); each ×3 runs.")+card("Does confidence mean anything?",bar([(n,R[n]["conf_ok"]) for n in R],"{:.2f}")+bar([(n,R[n]["conf_bad"]) for n in R],"{:.2f}"),"Top: mean confidence when right. Bottom: when wrong. Jev: 0.96 vs 0.74; Clef: 0.76 vs 0.45. Both are lower when wrong.")+card("Ambiguous inputs",bar([(n,R[n]["amb_abstain"]) for n in R]),"Share of 4 deliberately vague yes/no items where the model answered 0.25-0.75 (&quot;cannot tell&quot;) instead of guessing.")
-notes=("<p><b>Takeaways.</b> On this set both are accurate and deterministic. Jev is faster and far steadier in latency (p95 "+f"{J['lat']['p95']*1000:.0f} ms vs {Cl['lat']['p95']*1000:.0f} ms, Clef max {Cl['lat']['mx']:.1f} s), "+"is much better calibrated (Brier about 10x lower) and says &quot;I cannot tell&quot; on every vague input, where Clef commits to a confident answer on most. Clef is better on the 4-level severity task (94% vs 75% exact level), but three of Jev's four misses rate an all-users outage as level 3 instead of my label 2, which is arguably a labelling judgement, not an error. Clef's confidence is lower overall, so a 0.8 threshold does not separate right from wrong for it (93% accurate below it).</p>"
-"<p><b>Caveats.</b> The set is synthetic, small (60 items) and easy: yes/no and routing sit at the ceiling, so differences there are invisible and the numbers do not generalise to your real data. Run-to-run spread was measured over only 3 runs. Latency was measured over the CLI, one call at a time; an SDK with connection pooling would be faster for both. OpenAI was not run, so this is not yet a three-way comparison; the runner and report take any further provider with the same output shape.</p>")
-now=datetime.date.today().isoformat()
-HTML=f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Decision API benchmark</title>
+"""Build report.html (the benchmark report), og.png and data.json from results/. See AGENTS.md for the workflow.
+
+    python3 report.py          # URL of the published report: $REPORT_URL, default https://ai.vilinski.dev/jev-benchmark/
+"""
+import datetime, json, os, statistics as st
+
+from charts import bars, strip
+from models import CHAT, MODELS
+from scoring import bootstrap_cis, load_all, wrong_items
+from site_lib import AUTHOR, PROFILE, REPO, SITE, esc, meta, og_frame
+
+now = datetime.date.today().isoformat()
+URL = os.environ.get("REPORT_URL", f"{SITE}/jev-benchmark/").strip()
+DM_URL = f"{SITE}/decision-models/"
+R, H = load_all()                    # own-set and public-sample analysis by model key
+names = [m.key for m in MODELS]
+M = {m.key: m for m in MODELS}
+pc = lambda v: f"{v:.0%}"
+ms = lambda v: f"{v*1000:.0f} ms"
+d = lambda f: {n: f(R[n]) for n in names}
+B = lambda *a, **k: bars(MODELS, *a, **k)
+
+# --- cost: list price per 1M input tokens x measured input tokens per call (+ output tokens where they are charged)
+OUTTOK = {m.key: R[m.key]["tok"][1] if m.price_out else 0 for m in MODELS}
+COST = {m.key: R[m.key]["tok"][0] * m.price_in + OUTTOK[m.key] * m.price_out for m in MODELS}    # USD per 1M decisions, own inputs
+HCOST = {m.key: H[m.key]["tok"] * m.price_in + OUTTOK[m.key] * m.price_out for m in MODELS}      # same on the public-benchmark mix
+dedicated = [n for n in names if n != CHAT.key]
+charts_cost = [B("Cost per 1,000 decisions", "list price × tokens measured in this benchmark, one question per call", {n: COST[n] / 1000 for n in names}, lambda v: f"${v:.4f}", "low"),
+               B("List price per 1M input tokens", "output free except OpenAI ($1.60 per 1M)", {m.key: m.price_in for m in MODELS}, lambda v: f"${v:.3f}", "low"),
+               B("Input tokens per call", "each vendor counts with its own tokenizer, so this is billing size, not content size", d(lambda o: o["tok"][0]), lambda v: f"{v:.0f}", None)]
+cost_rows = "".join(f'<tr><td style="color:{m.color}"><b>{esc(m.label)}</b></td><td>${m.price_in:.3f}</td><td>{"free" if m.price_out == 0 else "$%.2f" % m.price_out}</td><td>{R[m.key]["tok"][0]:.0f}</td><td>${COST[m.key]:.2f}</td><td>${COST[m.key]/1000:.4f}</td></tr>' for m in MODELS)
+cost_tbl = f'<div class="tw"><table><tr><th>Model</th><th>Input / 1M tokens</th><th>Output / 1M tokens</th><th>Input tokens per call</th><th>Per 1M decisions</th><th>Per 1,000 decisions</th></tr>{cost_rows}</table></div>'
+
+# --- public sample
+th = "".join(f'<th style="color:{m.color}">{esc(m.label)}</th>' for m in MODELS)
+CI = bootstrap_cis({n: H[n]["accs"] for n in names})
+NPUB = H[names[0]]["n"]; PER = NPUB // 22   # items in the public sample and per dataset
+HW = st.mean((CI[n][1] - CI[n][0]) / 2 for n in dedicated) * 100   # typical 95% half-width, in points
+pub_charts = [B("jev-bench accuracy", f"{NPUB} items: {PER} random test items from each of the 22 datasets", {n: H[n]["acc"] for n in names}, pc, "high", 1),
+              B("jev-bench Brier score", "sum over options of (probability − label)²; lower is better", {n: H[n]["brier"] for n in names}, lambda v: f"{v:.3f}", "low"),
+              B("Latency p50 on real inputs", "inputs from 30 to 2,800 characters", {n: H[n]["p50"] for n in names}, ms, "low"),
+              B("Cost per 1,000 decisions on this mix", f"list price × tokens measured on the {NPUB} items", {n: HCOST[n] / 1000 for n in names}, lambda v: f"${v:.4f}", "low")]
+def shade(v, lo=0.2, hi=1.0):
+    t = max(0, min(1, (v - lo) / (hi - lo))); return f"background:rgba(18,163,107,{0.08+0.5*t:.2f})"
+heat = "".join("<tr><td>" + esc(sx) + "</td>" + "".join(f'<td style="{shade(H[n]["per"].get(sx, 0))}">{H[n]["per"].get(sx, 0):.0%}</td>' for n in names) + "</tr>" for sx in sorted(H[names[0]]["per"]))
+pub_tbl = "<div class=\"tw\"><table><tr><th>Model</th><th>Accuracy (95% CI)</th><th>Brier</th><th>p50 / p95</th><th>Failed or refused</th></tr>" + "".join(f'<tr><td style="color:{m.color}"><b>{esc(m.label)}</b></td><td>{H[m.key]["acc"]:.1%} <small>({CI[m.key][0]:.0%}–{CI[m.key][1]:.0%})</small></td><td>{H[m.key]["brier"]:.3f}</td><td>{H[m.key]["p50"]*1000:.0f} / {H[m.key]["p95"]*1000:.0f} ms</td><td>{H[m.key]["fail"]} of {H[m.key]["n"]}</td></tr>' for m in MODELS) + "</table></div>"
+pub_heat = '<div class="tw"><table class="heat"><tr><th>Dataset (' + str(PER) + ' items each)</th>' + th + '</tr>' + heat + '</table></div>'
+
+# --- own set
+charts = [strip(MODELS, R),
+          B("Latency p50", "median single call, incl. process start + TLS", d(lambda o: o["lat"]["p50"]), ms, "low"),
+          B("Latency p95", "slowest 5% of calls", d(lambda o: o["lat"]["p95"]), ms, "low"),
+          B("10 questions, one request", "all questions about one state; OpenAI runs them as 10 parallel calls", d(lambda o: o["batch"]), ms, "low"),
+          B("10 questions, 10 calls in sequence", "what you pay if you do not batch", d(lambda o: o["sep"]), lambda v: f"{v:.1f} s", "low"),
+          B("Accuracy: yes/no", "24 items × 3 runs, vague items excluded", d(lambda o: o["acc"]["noul"][0]), pc, "high", 1),
+          B("Accuracy: routing", "20 items × 3 runs, 6 options incl. “unclear”", d(lambda o: o["acc"]["choice"][0]), pc, "high", 1),
+          B("Accuracy: severity (exact level)", "16 items × 3 runs, 4 levels", d(lambda o: o["acc"]["score_exact"][0]), pc, "high", 1),
+          B("Severity error", "mean distance to the labelled level, in levels", d(lambda o: o["mae"]), lambda v: f"{v:.2f}", "low"),
+          B("Calibration: yes/no (Brier)", "squared error of the probability", d(lambda o: o["brier"]["noul"]), lambda v: f"{v:.3f}", "low"),
+          B("Calibration: routing (Brier)", "squared error over all options", d(lambda o: o["brier"]["choice"]), lambda v: f"{v:.3f}", "low"),
+          B("Confidence when right vs wrong", "a useful confidence is clearly lower when wrong", "", lambda v: f"{v:.2f}", "high", 1, pairs={n: (R[n]["conf_ok"], R[n]["conf_bad"]) for n in names}),
+          B("Accuracy when confidence ≥ 0.8", "how far you can trust a confident answer", d(lambda o: o["hi"][0]), pc, "high", 1),
+          B("Accuracy when confidence < 0.8", "a good model is worse here, so these can go to a human", d(lambda o: o["lo"][0]), pc, "low", 1),
+          B("Says “can’t tell” on vague input", "share of 4 vague yes/no items answered 0.25–0.75", d(lambda o: o["amb_abstain"]), pc, "high", 1),
+          B("Decision flips between runs", "items whose decision changed across 3 runs", d(lambda o: o["flip"]), pc, "low", None),
+          B("Input tokens per call", "as reported by the provider; sizes are not comparable across tokenizers", d(lambda o: o["tok"][0]), lambda v: f"{v:.0f}", None)]
+def tr(label, f, hint=""):
+    return f'<tr><td>{label}<div class="hint">{hint}</div></td>' + "".join(f'<td>{f(R[n])}</td>' for n in names) + '</tr>'
+tbl = (tr("Failed calls", lambda o: f'{o["err"]} / {o["n"]}') + tr("Overall accuracy", lambda o: f'{o["acc_all"]:.1%}')
+       + tr("Severity within ±¾ level", lambda o: pc(o["acc"]["score_pm1"][0])) + tr("Latency max", lambda o: ms(o["lat"]["mx"]))
+       + tr("Run-to-run std dev", lambda o: f'{o["sd"]:.3f}') + tr("Output tokens per call", lambda o: f'{o["tok"][1]:.0f}')
+       + tr("Items answered with conf ≥ 0.8", lambda o: f'{o["hi"][1]} of {o["hi"][1]+o["lo"][1]}'))
+wrong_rows = "".join(f'<tr><td>{esc(text)}</td><td>{esc(gold)}</td>' + "".join(f'<td class="{"bad" if w else "good"}">{esc(desc)}</td>' for _, desc, w in cells) + '</tr>' for text, gold, cells in wrong_items(R, names))
+
+# --- data for the interactive page (site.py) and the social image
+PTS = [dict(id=m.key, name=m.label, sub=m.sub, color=m.color, acc=round(H[m.key]["acc"], 4), lo=round(CI[m.key][0], 4), hi=round(CI[m.key][1], 4), brier=round(H[m.key]["brier"], 4),
+            p50=round(H[m.key]["p50"] * 1000), p95=round(H[m.key]["p95"] * 1000), cost=round(HCOST[m.key] / 1000, 5), fail=H[m.key]["fail"], n=H[m.key]["n"], own=round(R[m.key]["acc_all"], 4)) for m in MODELS]
+json.dump({"date": now, "npub": NPUB, "per": PER, "points": PTS}, open("data.json", "w"), indent=1)
+
+J, Ce, Cl, OD, OC = (R[n] for n in ("Jev", "Celeris-1", "Clef", "OpenAI Decisions", CHAT.key))
+notes = f'''<p><b>Public benchmark.</b> On a {NPUB}-item sample of jev-bench, Celeris is clearly the most accurate ({H["Celeris-1"]["acc"]:.0%}, 95% CI {CI["Celeris-1"][0]:.0%}&ndash;{CI["Celeris-1"][1]:.0%}) and best calibrated (Brier {H["Celeris-1"]["brier"]:.3f}). Clef ({H["Clef"]["acc"]:.0%}) and Jev ({H["Jev"]["acc"]:.0%}) follow, then OpenAI Decisions ({H["OpenAI Decisions"]["acc"]:.0%}); the DIY chat adapter is far behind because it cannot handle questions with more than 26 options (five datasets). The 95% intervals are about &plusmn;{HW:.1f} points wide, so Celeris leads OpenAI Decisions clearly, while Clef and Jev are statistically tied.</p>
+<p><b>Speed.</b> Jev ({J["lat"]["p50"]*1000:.0f} ms) and OpenAI Decisions ({OD["lat"]["p50"]*1000:.0f} ms) have the lowest median on my own set, Celeris is steady at {Ce["lat"]["p50"]*1000:.0f} ms, Clef is slower with a long tail (p95 {Cl["lat"]["p95"]*1000:.0f} ms, slowest call {Cl["lat"]["mx"]:.1f} s). Celeris advertises 67 ms from AWS us-east-1; from here, through the CLI with a new TLS handshake per call, every number is dominated by the network path. The first call of each run is left out as a cold start.</p>
+<p><b>My own 60-item set</b> is easy: all five models are within a few points of each other ({J["acc_all"]:.0%} to {Cl["acc_all"]:.0%}), and one answer is worth almost two points. OpenAI Decisions has the best calibration here (Brier {OD["brier"]["noul"]:.4f} yes/no, {OD["brier"]["choice"]:.4f} routing), Jev is the only model that answers every vague input with &ldquo;can&rsquo;t tell&rdquo; ({J["amb_abstain"]:.0%}), and the DIY chat adapter is nearly as confident when wrong ({OC["conf_bad"]:.2f}) as when right ({OC["conf_ok"]:.2f}). On the harder public data the ranking changes, which is the reason to trust the larger set more.</p>
+<p><b>Cost.</b> All four dedicated decision APIs cost between ${min(COST[n] for n in dedicated)/1000:.4f} and ${max(COST[n] for n in dedicated)/1000:.4f} per 1,000 single-question decisions on my short inputs, and ${min(HCOST[n] for n in dedicated)/1000:.4f} to ${max(HCOST[n] for n in dedicated)/1000:.4f} on the longer public-benchmark inputs, so a million decisions costs roughly $6 to $42. OpenAI Decisions is priced at $0.10 per million input tokens with no output charge; the DIY chat route costs about {COST[CHAT.key]/COST["Celeris-1"]:.0f}x Celeris on short inputs. Cost is a minor factor at small scale; accuracy and calibration matter more. Tokens are counted by each vendor&rsquo;s own tokenizer.</p>
+<p><b>Caveats.</b> The public sample is {PER} items per dataset, one run, so differences under about {HW:.0f} points are inside the error margin. My own set is synthetic, small and easy, with 3 repeats. Latency comes from the <code>jev</code> CLI on one machine. Severity labels on my set are my own judgement. Scoring on jev-bench counts a failed or refused request as a uniform answer. jev-bench is published by a third party and has a mixed licence; I used only a small sample of its test splits. The OpenAI Decisions API is in public beta. No sponsorship or affiliation with any of these vendors.</p>'''
+
+# --- social preview and SEO
+top = max(p["acc"] for p in PTS)
+rows = ""
+for i, p in enumerate(sorted(PTS, key=lambda q: -q["acc"])):
+    y = 250 + i * 60; w = 420 * p["acc"] / top
+    rows += (f'<text x="64" y="{y+26}" font-size="28" font-weight="700" fill="#f4f4f5">{esc(p["name"])}</text><rect x="330" y="{y}" width="{w:.0f}" height="34" rx="6" fill="{p["color"]}"/>'
+             f'<text x="{330+w+14:.0f}" y="{y+26}" font-size="26" fill="#d4d4d8">{p["acc"]:.0%} · ${p["cost"]:.3f} per 1,000</text>')
+og_frame("og", "DECISION API BENCHMARK", "Five decision models, tested", f"{NPUB} public items + 180 own calls per model: accuracy, speed, cost", "#4f46e5", rows,
+         footer=f"Jev · Celeris · Clef · OpenAI · measured with the jev CLI · {now}")
+TITLE = "Decision API benchmark: Jev, Celeris, Clef and OpenAI (accuracy, cost, latency)"
+DESC = (f"Measured comparison of TypeSafe Jev, Celeris-1, Cloudflare Clef and OpenAI's Decisions API as typed decision models: accuracy on a {NPUB}-item sample of the public jev-bench, "
+        f"cost per decision, latency and calibration, plus 180 calls per model on a 60-item set, run through the jev CLI on {now}.")
+SEO = meta(URL, TITLE, DESC, "Bar chart: accuracy and cost per 1,000 decisions of Jev, Celeris, Clef and two OpenAI variants", kind="article", modified=now,
+           social_title="Decision APIs compared: Jev, Celeris, Clef, OpenAI", social_desc="Accuracy, cost and speed of five typed decision models, measured on public data with the jev CLI.",
+           ld={"@type": "TechArticle", "headline": TITLE, "datePublished": now, "author": {**AUTHOR, "sameAs": ["https://www.linkedin.com/in/andreas-vilinski/", "https://github.com/vilinski"]},
+               "about": ["decision models", "LLM evaluation", "latency", "calibration"], "mainEntityOfPage": URL, "citation": REPO,
+               "isBasedOn": {"@type": "SoftwareSourceCode", "name": "jev", "codeRepository": REPO, "programmingLanguage": "Rust", "license": "https://spdx.org/licenses/MIT.html"}},
+           extra=('<meta name="color-scheme" content="light dark">',
+                  '<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%278%27 fill=%27%234f46e5%27/%3E%3Ctext x=%2716%27 y=%2722%27 font-family=%27system-ui,sans-serif%27 font-size=%2713%27 font-weight=%27900%27 fill=%27white%27 text-anchor=%27middle%27%3Ejev%3C/text%3E%3C/svg%3E">'))
+
+HTML = f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{esc(TITLE)}</title>
+{SEO}
 <style>
 :root{{--bg:#fafaf7;--fg:#1b1b1b;--mut:#666;--card:#fff;--line:#e3e1da;--bad:#fbe3e0;--good:#e3f4e6}}
 @media(prefers-color-scheme:dark){{:root{{--bg:#16171a;--fg:#ececec;--mut:#9a9a9a;--card:#1f2024;--line:#33353a;--bad:#4a2522;--good:#1f3a25}}}}
-body{{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,sans-serif}}
-main{{max-width:980px;margin:0 auto;padding:24px 16px 64px}}
-h1{{font-size:28px;margin:0}} h2{{margin-top:40px;font-size:20px}} h3{{margin:0 0 2px;font-size:16px}}
-.sub,.hint,small{{color:var(--mut);font-size:12.5px;font-weight:400}} .sub{{margin:0 0 12px}}
-.grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px}}
-.card{{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px}}
-.barrow{{display:grid;grid-template-columns:130px 1fr 60px;gap:8px;align-items:center;margin:6px 0;font-size:13px}}
-.bt{{background:var(--line);height:12px;border-radius:6px;overflow:hidden}} .bf{{height:100%}} .bv{{text-align:right;font-variant-numeric:tabular-nums}}
-table{{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden}}
-th,td{{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top;font-size:14px}} td{{font-variant-numeric:tabular-nums}}
-td.bad{{background:var(--bad)}} td.good{{background:var(--good)}}
-.tablewrap{{overflow-x:auto}} .note{{background:var(--card);border-left:4px solid #999;padding:10px 14px;margin:14px 0;border-radius:4px}}
-.kpis{{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin:18px 0}} .kpi{{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px}} .kpi b{{font-size:24px;display:block}}
+body{{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,sans-serif}} main{{max-width:1040px;margin:0 auto;padding:24px 16px 64px}}
+h1{{font-size:28px;margin:0}} h2{{margin-top:36px;font-size:20px}} h3{{margin:0 0 2px;font-size:15px}}
+.sub,.hint,small{{color:var(--mut);font-size:12.5px;font-weight:400}} .sub{{margin:0 0 8px}} .dir{{font-weight:600}} .lg{{display:block}}
+.grid2{{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px}} .wide{{grid-column:1/-1}}
+.card{{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px}}
+svg text{{fill:var(--fg)}} .lbl{{font-size:12.5px;font-weight:600}} .val{{font-size:12px;fill:var(--mut)}} .tick{{font-size:11px;fill:var(--mut)}} .mk{{font-size:11px;font-weight:600}} svg .mk{{fill:currentColor}}
+.grid{{stroke:var(--line);stroke-width:1}}
+.key{{display:flex;flex-wrap:wrap;gap:16px;margin:10px 0;font-weight:600}} .key i{{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:6px}}
+table{{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--line)}} th,td{{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top;font-size:14px}}
+a{{color:inherit}} td.bad{{background:var(--bad)}} td.good{{background:var(--good)}} .tw{{overflow-x:auto}} .note{{background:var(--card);border-left:4px solid #999;padding:4px 16px;border-radius:4px}}
+table.heat td{{text-align:center}}
 </style></head><body><main>
-<h1>Decision API benchmark: Jev vs Clef</h1>
-<p class="sub">{now} · {R[names[0]]["n"]} calls per model ({len(N)+len(C)+len(S)} synthetic labelled items × 3 runs) · via the <code>jev</code> CLI, one question per call · OpenAI was skipped (not run).</p>
-{kpis}
-<h2>Speed</h2>
-<div class="grid">{speed}</div>
-<h2>Quality</h2>
-<div class="grid">{qual}</div>
-<h2>All numbers</h2><div class="tablewrap"><table><tr><th>Metric</th>{th}</tr>{table}</table></div>
-<h2>Items where a model was wrong (majority of 3 runs)</h2>
-<div class="tablewrap"><table><tr><th>Text</th><th>Gold</th>{th}</tr>{"".join(trs)}</table></div>
-<h2>How to read this</h2>
-<div class="note">{notes}</div>
+<h1>Decision API benchmark: Jev, Celeris, Clef and OpenAI</h1>
+<p class="sub">{now} · by <a rel="author" href="{PROFILE}">Andreas Vilinski</a> · two test sets, run via the <a href="{REPO}"><code>jev</code> CLI</a> with one question per call: {NPUB} items from the public jev-bench ({PER} per dataset) and my own 60 labelled items × 3 runs. OpenAI Decisions = <code>gpt-6-luna</code> on <code>/v1/decisions</code> (public beta); OpenAI chat (DIY) = <code>gpt-4.1-mini</code> read through token log-probabilities</p>
+<p class="sub"><a href="/">&larr; All charts</a> · <a href="{DM_URL}">Interactive scatter plot: accuracy against cost and speed</a></p>
+<div class="key">{"".join(f'<span><i style="background:{m.color}"></i>{esc(m.key)}</span>' for m in MODELS)}</div>
+<h2>Speed</h2><p class="sub">Every call on my 60-item set, then median, tail and batching. First call of each run left out (cold start).</p><div class="grid2">{"".join(charts[:5])}</div>
+<h2>Accuracy on public data: jev-bench sample</h2><p class="sub">Real, public data in the System One format: <a href="https://huggingface.co/datasets/Praveenrajus/jev-bench">Praveenrajus/jev-bench</a> (22 datasets such as MNLI, BoolQ, Banking77, MMLU, SST-5), {PER} test items per dataset. Same questions to every model, scored by accuracy of the top option and the Brier score.</p>{pub_tbl}<h3 style="margin-top:18px">Accuracy per dataset</h3>{pub_heat}
+<h2>Public benchmark in charts</h2><div class="grid2">{"".join(pub_charts)}</div>
+<h2>Cost</h2><div class="grid2">{"".join(charts_cost)}</div>{cost_tbl}
+<p class="sub">Prices are list prices checked on 2026-10-12: <a href="https://celeris.ai/celeris-1-decision">Celeris</a> ($0.04), <a href="https://eesel.ai/blog/typesafe-jev-pricing">Jev</a> ($0.042, no official pricing page found; taken from third-party write-ups of the launch), <a href="https://developers.cloudflare.com/workers-ai/platform/pricing/">Cloudflare clef-flash</a> ($0.038, i.e. 3,455 neurons per M at $0.011 per 1,000; 10,000 neurons per day are free), <a href="https://developers.openai.com/api/docs/guides/decisions">OpenAI Decisions</a> ($0.10, no output charge), <a href="https://developers.openai.com/api/docs/models/gpt-4.1-mini">OpenAI gpt-4.1-mini</a> ($0.40 in, $1.60 out). Cost per decision = input tokens measured here × price. The four decision APIs read the state once for N questions in a request; the DIY chat route sends the state again for every question.</p>
+<h2>Accuracy (my 60-item set)</h2><div class="grid2">{"".join(charts[5:9])}</div>
+<h2>Calibration and trust</h2><div class="grid2">{"".join(charts[9:])}</div>
+<h2>More numbers</h2><div class="tw"><table><tr><th>Metric</th>{th}</tr>{tbl}</table></div>
+<h2>Items where a model was wrong (my set, majority of 3 runs)</h2><div class="tw"><table><tr><th>Text</th><th>Gold</th>{th}</tr>{wrong_rows}</table></div>
+<h2>Reading the results</h2><div class="note">{notes}</div>
+<footer class="sub" style="margin-top:32px">Measured with <a href="{REPO}">jev</a>, a Rust CLI for typed decision models (TypeSafe Jev, Celeris, Cloudflare Clef, Ollama, OpenAI). Source, benchmark scripts and raw results: <a href="{REPO}/tree/main/docs/benchmark">{REPO.replace("https://", "")}</a>. Generated {now}.</footer>
 </main></body></html>'''
-open("report.html","w").write(HTML)
+open("report.html", "w").write(HTML)

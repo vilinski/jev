@@ -1,3 +1,6 @@
 target/
 __pycache__/
 docs/benchmark/run-*.log
+docs/benchmark/jev-bench-data/
+docs/benchmark/site/
+docs/benchmark/results/*.log

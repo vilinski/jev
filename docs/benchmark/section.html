@@ -1,0 +1,91 @@
+<main class="app" id="decision-models">
+  <header>
+    <h1>Decision Models: Accuracy vs. Cost and Speed</h1>
+    <p class="sub">Typed yes/no, choice and score decisions from five hosted models on {NPUB} items of the public <a href="https://huggingface.co/datasets/Praveenrajus/jev-bench" style="color:var(--accent)">jev-bench</a>. Bubble area is proportional to median latency, or to cost when latency is on the x-axis. <span class="updated">Measured {NOW} · <a href="/jev-benchmark/" style="color:var(--accent)">full report</a></span></p>
+  </header>
+  <section class="controls" aria-label="Decision model chart controls">
+    <div class="control"><label for="dmx">Horizontal axis</label><select id="dmx"><option value="cost">Cost per 1,000 decisions</option><option value="p50">Median latency</option><option value="p95">p95 latency</option></select></div>
+    <div class="control"><label for="dmy">Vertical axis</label><select id="dmy"><option value="acc">jev-bench accuracy</option><option value="brier">jev-bench Brier score</option><option value="own">Accuracy on my own 60 items</option></select></div>
+    <label class="check"><input id="dmpareto" type="checkbox" checked> Pareto frontier</label>
+    <label class="check"><input id="dmci" type="checkbox" checked> 95% interval</label>
+  </section>
+  <div class="layout">
+    <div class="chart-wrap">
+      <svg id="dmchart" viewBox="0 0 1080 520" role="img" aria-label="Interactive scatter plot of decision-model accuracy against cost per decision"></svg>
+      <div class="tooltip" id="dmtip"></div>
+    </div>
+    <aside class="side">
+      <h2>Legend</h2>
+      <div class="legend" id="dmlegend"></div>
+      <div class="legend-heading" id="dmbubbleheading"></div>
+      <div class="bubble-scale" id="dmbubbles" style="height:auto;min-height:39px"></div>
+      <p class="legend-note"><span class="attractive-swatch"></span> Green gradient marks cheaper or faster with a better score. <span class="keyline dashed"></span> Dashed line marks the Pareto frontier: no other model is both cheaper (or faster) and better.</p>
+      <p class="legend-note">Cost is list price × tokens measured on the {NPUB} items. The sample is {PER} items per dataset, one run, so gaps under about 5 points are inside the 95% interval. The OpenAI Decisions API is in public beta; the DIY row is a chat model made to answer through token log-probabilities and cannot take questions with more than 26 options.</p>
+    </aside>
+  </div>
+  <details class="sources">
+    <summary>Method and data</summary>
+    <p>Same questions to every model through the <code>jev</code> CLI (one question per request, sequential). Accuracy counts the top-probability option; Brier is the sum over options of (probability − label)²; a failed or refused request scores as uniform, following the method published with <a href="https://celeris.ai/celeris-1-decision">Celeris-1</a>. Prices: Celeris $0.04, Jev $0.042, Cloudflare clef-flash $0.038, OpenAI Decisions $0.10 per 1M input tokens (output free); gpt-4.1-mini $0.40 in, $1.60 out. Latency includes process start and a fresh TLS connection per call, so it is higher than vendor-published figures. Full tables, per-dataset results and caveats: <a href="/jev-benchmark/">/jev-benchmark/</a>.</p>
+  </details>
+</main>
+<script>
+(() => {
+  const pts = __PTS__;
+  const $ = id => document.getElementById(id), svg = $('dmchart'), tip = $('dmtip');
+  const W = 1080, H = 520, m = { l: 74, r: 36, t: 28, b: 62 };
+  const fmt = { cost: v => '$' + v.toFixed(4), p50: v => Math.round(v) + ' ms', p95: v => Math.round(v) + ' ms', acc: v => (v * 100).toFixed(1) + '%', brier: v => v.toFixed(3), own: v => (v * 100).toFixed(1) + '%' };
+  const names = { cost: 'Cost per 1,000 decisions (log scale)', p50: 'Median latency per call (ms)', p95: 'p95 latency per call (ms)', acc: 'Accuracy on jev-bench sample', brier: 'Brier score on jev-bench (lower is better, axis flipped)', own: 'Accuracy on my own 60 items' };
+  const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  $('dmlegend').innerHTML = pts.map(p => `<div class="legend-item"><i class="swatch" style="background:${p.color}"></i><span>${esc(p.name)}</span></div>`).join('');
+  function nice(lo, hi, n) { const span = hi - lo, step0 = span / n, mag = Math.pow(10, Math.floor(Math.log10(step0))), r = step0 / mag, step = (r < 1.5 ? 1 : r < 3.5 ? 2 : r < 7.5 ? 5 : 10) * mag; const out = []; for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) out.push(+v.toFixed(10)); return out; }
+  function render() {
+    const xm = $('dmx').value, ym = $('dmy').value;
+    const logx = xm === 'cost', flipy = ym === 'brier', bm = (xm === 'p50' || xm === 'p95') ? 'cost' : 'p50';
+    const xs = pts.map(p => p[xm]), ys = pts.map(p => p[ym]);
+    let xlo = Math.min(...xs), xhi = Math.max(...xs), ylo = Math.min(...ys), yhi = Math.max(...ys);
+    if (ym === 'acc') { ylo = Math.min(ylo, ...pts.map(p => p.lo)); yhi = Math.max(yhi, ...pts.map(p => p.hi)); }
+    const px = (xhi - xlo) * .12 || 1, py = (yhi - ylo) * .14 || .05;
+    if (logx) { xlo = Math.log10(xlo) - .12; xhi = Math.log10(xhi) + .12; } else { xlo = Math.max(0, xlo - px); xhi += px; }
+    ylo -= py; yhi += py;
+    const X = v => m.l + ((logx ? Math.log10(v) : v) - xlo) / (xhi - xlo) * (W - m.l - m.r);
+    const Y = v => { const t = (v - ylo) / (yhi - ylo); return (flipy ? m.t + t : H - m.b - t * (H - m.t - m.b)) + (flipy ? 0 : 0) ; };
+    const Yp = v => flipy ? m.t + (v - ylo) / (yhi - ylo) * (H - m.t - m.b) : H - m.b - (v - ylo) / (yhi - ylo) * (H - m.t - m.b);
+    let g = `<defs><linearGradient id="dmz" x1="${flipy ? 0 : 0}" y1="${flipy ? 0 : 1}" x2="1" y2="${flipy ? 1 : 0}"><stop offset="0" stop-color="#2caa72" stop-opacity="0"/><stop offset="1" stop-color="#2caa72" stop-opacity=".16"/></linearGradient></defs>`;
+    g += `<rect x="${m.l}" y="${m.t}" width="${W - m.l - m.r}" height="${H - m.t - m.b}" fill="url(#dmz)" transform="${flipy ? '' : ''}"/>`;
+    const xticks = logx ? [0.01, 0.02, 0.03, 0.05, 0.1, 0.2].filter(v => Math.log10(v) > xlo && Math.log10(v) < xhi) : nice(xlo, xhi, 6);
+    const yticks = nice(ylo, yhi, 6);
+    xticks.forEach(v => { g += `<line class="grid" x1="${X(v)}" x2="${X(v)}" y1="${m.t}" y2="${H - m.b}"/><text class="tick" x="${X(v)}" y="${H - m.b + 18}" text-anchor="middle">${xm === 'cost' ? '$' + v : Math.round(v)}</text>`; });
+    yticks.forEach(v => { g += `<line class="grid" x1="${m.l}" x2="${W - m.r}" y1="${Yp(v)}" y2="${Yp(v)}"/><text class="tick" x="${m.l - 8}" y="${Yp(v) + 4}" text-anchor="end">${ym === 'brier' ? v.toFixed(2) : Math.round(v * 100) + '%'}</text>`; });
+    g += `<line class="axis" x1="${m.l}" x2="${W - m.r}" y1="${H - m.b}" y2="${H - m.b}"/><line class="axis" x1="${m.l}" x2="${m.l}" y1="${m.t}" y2="${H - m.b}"/>`;
+    g += `<text class="axis-label" x="${(m.l + W - m.r) / 2}" y="${H - 14}" text-anchor="middle">${names[xm]}</text><text class="axis-label" transform="translate(18 ${(m.t + H - m.b) / 2}) rotate(-90)" text-anchor="middle">${names[ym]}</text>`;
+    g += `<text class="zone-label" x="${m.l + 10}" y="${flipy ? m.t + 16 : m.t + 16}">BETTER</text>`;
+    const good = p => flipy ? -p[ym] : p[ym];
+    if ($('dmpareto').checked) {
+      const sorted = [...pts].sort((a, b) => a[xm] - b[xm]); let best = -Infinity; const fr = [];
+      sorted.forEach(p => { if (good(p) > best) { best = good(p); fr.push(p); } });
+      if (fr.length > 1) g += `<polyline class="pareto-line" points="${fr.map(p => X(p[xm]) + ',' + Yp(p[ym])).join(' ')}"/>`;
+    }
+    // Fixed scale, not stretched to the data: bubble area is proportional to latency or cost, so fast or cheap models stay small.
+    const scale = bm === 'p50' ? { max: 1500, keys: [250, 500, 1000], label: v => v + ' ms', head: 'Bubble area: median latency' } : { max: 0.15, keys: [0.02, 0.05, 0.1], label: v => '$' + v, head: 'Bubble area: cost per 1,000 decisions' };
+    const rad = p => Math.max(4, 30 * Math.sqrt(p[bm] / scale.max));
+    $('dmbubbleheading').textContent = scale.head;
+    $('dmbubbles').innerHTML = scale.keys.map(v => { const d = 2 * Math.max(4, 30 * Math.sqrt(v / scale.max)); return `<div class="bubble-key"><i class="bubble" style="width:${d.toFixed(0)}px;height:${d.toFixed(0)}px"></i><span>${scale.label(v)}</span></div>`; }).join('');
+    if (ym === 'acc' && $('dmci').checked) pts.forEach(p => { const x = X(p[xm]); g += `<line x1="${x}" x2="${x}" y1="${Yp(p.lo)}" y2="${Yp(p.hi)}" stroke="${p.color}" stroke-width="2" opacity=".5"/><line x1="${x - 5}" x2="${x + 5}" y1="${Yp(p.lo)}" y2="${Yp(p.lo)}" stroke="${p.color}" stroke-width="2" opacity=".5"/><line x1="${x - 5}" x2="${x + 5}" y1="${Yp(p.hi)}" y2="${Yp(p.hi)}" stroke="${p.color}" stroke-width="2" opacity=".5"/>`; });
+    [...pts].sort((a, b) => rad(b) - rad(a)).forEach(p => {
+      const cx = X(p[xm]), cy = Yp(p[ym]);
+      g += `<circle class="point" tabindex="0" data-id="${esc(p.id)}" cx="${cx}" cy="${cy}" r="${rad(p).toFixed(1)}" fill="${p.color}" fill-opacity=".82"/>`;
+      const right = cx < W - 190; g += `<text class="point-label" x="${cx + (right ? 1 : -1) * (rad(p) + 6)}" y="${cy + 4}" text-anchor="${right ? 'start' : 'end'}" fill="${p.color}">${esc(p.name)}</text>`;
+    });
+    svg.innerHTML = g;
+    svg.querySelectorAll('.point').forEach(el => {
+      const p = pts.find(q => q.id === el.dataset.id);
+      const show = ev => { const box = svg.parentElement.getBoundingClientRect(), r = el.getBoundingClientRect();
+        tip.innerHTML = `<div class="tt-title" style="color:${p.color}">${esc(p.name)}</div><div class="tt-sub">${esc(p.sub)}</div><div class="tt-grid"><span>Accuracy</span><span>${fmt.acc(p.acc)} (${fmt.acc(p.lo)}–${fmt.acc(p.hi)})</span><span>Brier</span><span>${fmt.brier(p.brier)}</span><span>Median / p95</span><span>${p.p50} / ${p.p95} ms</span><span>Cost per 1,000</span><span>${fmt.cost(p.cost)}</span><span>Failed or refused</span><span>${p.fail} of ${p.n}</span><span>My own 60 items</span><span>${fmt.own(p.own)}</span></div>`;
+        tip.classList.add('show'); const left = Math.min(Math.max(r.left - box.left + r.width / 2 + 14, 8), box.width - 262); tip.style.left = left + 'px'; tip.style.top = Math.max(r.top - box.top - 10, 4) + 'px'; };
+      el.addEventListener('mouseenter', show); el.addEventListener('focus', show); el.addEventListener('mouseleave', () => tip.classList.remove('show')); el.addEventListener('blur', () => tip.classList.remove('show'));
+    });
+  }
+  ['dmx', 'dmy', 'dmpareto', 'dmci'].forEach(id => $(id).addEventListener('change', render));
+  render();
+})();
+</script>
