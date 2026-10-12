@@ -124,18 +124,20 @@ def score_row(r):
     return (1 / len(top) if gold in top else 0.0), b, len(opts)
 
 def analyse_public(d):
-    rows = d["rows"]; acc = []; br = []; per = collections.defaultdict(list); fail = 0
+    rows = d["rows"]; acc = []; br = []; per = collections.defaultdict(list); fail = 0; credits = []   # credits: one entry per row, None where the row could not be scored
     for r in rows:
         refused = r["ok"] and (r["res"]["q"].get("type") == "refusal")
         if not r["ok"] or refused:
             fail += 1
-            if r["kind"] == "score": continue   # the level count of a failed score row is unknown
+            if r["kind"] == "score":   # the level count of a failed score row is unknown
+                credits.append(None); continue
         s = score_row(r)
+        credits.append(s[0])
         if s[0] is None: continue
         acc.append(s[0]); br.append(s[1]); per[r["source"]].append(s[0])
     lat = [r["dt"] for r in rows if r["ok"]]
     toks = [int(r["usage"].split()[0]) for r in rows if r["ok"] and r["usage"]]
-    return dict(accs=acc, n=len(rows), fail=fail, acc=st.mean(acc), brier=st.mean(br), per={k: st.mean(v) for k, v in per.items()},
+    return dict(accs=acc, credits=credits, n=len(rows), fail=fail, acc=st.mean(acc), brier=st.mean(br), per={k: st.mean(v) for k, v in per.items()},
                 p50=pct(lat, .5), p95=pct(lat, .95), mx=max(lat), tok=st.mean(toks) if toks else 0)
 
 def bootstrap_cis(values_by_key, runs=2000, seed=1):
@@ -145,6 +147,19 @@ def bootstrap_cis(values_by_key, runs=2000, seed=1):
     for key, values in values_by_key.items():
         bs = sorted(sum(rng.choices(values, k=len(values))) / len(values) for _ in range(runs))
         out[key] = (bs[int(runs * .025)], bs[int(runs * .975)])
+    return out
+
+def paired_cis(credits_by_key, pairs, runs=2000, seed=1):
+    """{(a, b): (mean difference a-b, low, high)}: 95% interval of the accuracy difference on the items both models were scored on.
+
+    Both models answered the same items, so resampling items jointly gives a much tighter interval than comparing two separate intervals.
+    """
+    rng = random.Random(seed)
+    out = {}
+    for a, b in pairs:
+        diffs = [x - y for x, y in zip(credits_by_key[a], credits_by_key[b]) if x is not None and y is not None]
+        ms = sorted(sum(rng.choices(diffs, k=len(diffs))) / len(diffs) for _ in range(runs))
+        out[(a, b)] = (sum(diffs) / len(diffs), ms[int(runs * .025)], ms[int(runs * .975)])
     return out
 
 # ---------------------------------------------------------------- loading
