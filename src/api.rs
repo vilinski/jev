@@ -19,10 +19,12 @@ use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde_json::{Value, json};
 
 use crate::Error;
+use crate::decisions;
 use crate::key::Secret;
 use crate::openai;
-use crate::provider::Provider;
+use crate::provider::{Provider, Wire};
 use crate::telemetry;
+use crate::util;
 
 /// First backoff delay; doubles per attempt.
 const BACKOFF_INITIAL: Duration = Duration::from_millis(500);
@@ -153,10 +155,10 @@ impl Client {
         let url = self
             .provider
             .system_one_url(&self.base, self.account.as_deref(), model);
-        let result = if self.provider == Provider::Openai {
-            self.openai_system_one(&url, body, model).await
-        } else {
-            self.execute(&Method::POST, &url, Some(body)).await
+        let result = match self.provider.wire() {
+            Wire::SystemOne => self.execute(&Method::POST, &url, Some(body)).await,
+            Wire::Decisions => self.decisions_system_one(&url, body, model).await,
+            Wire::ChatLogprobs => self.openai_system_one(&url, body, model).await,
         };
         match &result {
             Ok(response) => {
@@ -181,6 +183,22 @@ impl Client {
         result
     }
 
+    /// Sends a System One request to `OpenAI`'s Decisions API and maps the
+    /// reply back onto the System One shape.
+    async fn decisions_system_one(
+        &self,
+        url: &str,
+        body: &Value,
+        model: &str,
+    ) -> Result<Response, Error> {
+        let translated = decisions::request(body, model)?;
+        let reply = self.execute(&Method::POST, url, Some(&translated)).await?;
+        Ok(Response {
+            body: decisions::response(&reply.body, body)?,
+            request_id: reply.request_id,
+        })
+    }
+
     /// Answers a System One request with one chat completion per question,
     /// sent concurrently, and assembles the same `answers` shape the other
     /// providers return.
@@ -194,7 +212,7 @@ impl Client {
             .get("questions")
             .and_then(Value::as_object)
             .ok_or_else(|| Error::Usage("the request needs a `questions` object".to_owned()))?;
-        let state = openai::render_state(body.get("state").unwrap_or(&Value::Null));
+        let state = util::render_state(body.get("state").unwrap_or(&Value::Null));
         let prepared = questions
             .iter()
             .map(|(id, question)| Ok((id, openai::prepare(model, &state, question)?)))

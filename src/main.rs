@@ -13,10 +13,12 @@
 //! See <https://docs.typesafe.ai> for the question types and response shapes.
 
 mod api;
+mod decisions;
 mod key;
 mod openai;
 mod provider;
 mod telemetry;
+mod util;
 
 use std::io::{IsTerminal, Read};
 use std::path::PathBuf;

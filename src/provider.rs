@@ -1,9 +1,9 @@
 //! The System One backends `jev` can talk to, and the ways they differ.
 //!
 //! All of them take the same request body (`model`, `state`, `questions`) and
-//! return the same `answers`. What changes is the URL, the credential, the
-//! header that carries a request id, and whether the answer arrives wrapped in
-//! a Cloudflare-style envelope.
+//! return the same `answers`. What differs is data: URL, credential, request
+//! id header, model restrictions and the wire protocol. Each provider is one
+//! [`Spec`]; adding a provider means adding one entry here.
 
 use clap::ValueEnum;
 use serde_json::{Value, json};
@@ -22,50 +22,168 @@ pub enum Provider {
     /// A local Ollama server running `clef` or `clef-flash`; needs no credential.
     #[value(alias = "ol")]
     Ollama,
-    /// `OpenAI` chat completions, answered through token log-probabilities.
+    /// `OpenAI`'s Decisions API (`/v1/decisions`, model `gpt-6-luna`).
     #[value(alias = "oai")]
     Openai,
+    /// A `OpenAI` chat model made to answer through token log-probabilities.
+    OpenaiChat,
+    /// Celeris-1 Decision, a hosted diffusion model with a System One endpoint.
+    #[value(alias = "cel")]
+    Celeris,
+}
+
+/// How a provider's HTTP API relates to the System One request `jev` builds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Wire {
+    /// The request body is sent as is and the reply already has `answers`
+    /// (Cloudflare wraps it in a `result` envelope, which the client removes).
+    SystemOne,
+    /// `OpenAI`'s Decisions API: translated by [`crate::decisions`].
+    Decisions,
+    /// `OpenAI` chat completions, one per question: translated by [`crate::openai`].
+    ChatLogprobs,
+}
+
+/// Everything that differs between providers, as data.
+struct Spec {
+    /// Name as spelled on the command line; also the human-readable name in errors.
+    name: &'static str,
+    /// API root used when `--url` is not given.
+    url: &'static str,
+    /// Model used when `--model` is not given.
+    model: &'static str,
+    /// Legacy environment variable that overrides the base URL.
+    url_env: Option<&'static str>,
+    /// Response header holding the id to quote in a bug report.
+    request_id: Option<&'static str>,
+    /// Keychain slot of the secret; `None` when no credential is needed.
+    secret: Option<Slot>,
+    /// Keychain slot of the account id, for providers that put it in the URL.
+    account: Option<Slot>,
+    /// Path of the decision request below the base, with `<account>` and `<model>` placeholders.
+    path: &'static str,
+    /// Path of the model listing below the base, where the provider has one.
+    models_path: Option<&'static str>,
+    /// The only models the provider serves, for providers that restrict them.
+    fixed_models: Option<&'static [&'static str]>,
+    /// Wire protocol.
+    wire: Wire,
 }
 
 /// Models Cloudflare accepts in the `model` field and URL path.
 const CLOUDFLARE_MODELS: [&str; 2] = ["clef", "clef-flash"];
 
+/// A `Spec` with the common defaults: no credential, no restrictions, plain System One.
+const BASE: Spec = Spec {
+    name: "",
+    url: "",
+    model: "",
+    url_env: None,
+    request_id: None,
+    secret: None,
+    account: None,
+    path: "/v1/systemone",
+    models_path: None,
+    fixed_models: None,
+    wire: Wire::SystemOne,
+};
+
+const TYPESAFE: Spec = Spec {
+    name: "typesafe",
+    url: "https://api.typesafe.ai",
+    model: "jev-latest",
+    url_env: Some("TYPESAFE_API_URL"),
+    request_id: Some("x-typesafe-request-id"),
+    secret: Some(key::TYPESAFE_KEY),
+    models_path: Some("/v1/models"),
+    ..BASE
+};
+
+const CLOUDFLARE: Spec = Spec {
+    name: "cloudflare",
+    url: "https://api.cloudflare.com/client/v4",
+    model: "clef-flash",
+    request_id: Some("cf-ray"),
+    secret: Some(key::CLOUDFLARE_TOKEN),
+    account: Some(key::CLOUDFLARE_ACCOUNT),
+    path: "/accounts/<account>/ai/run/@cf/cloudflare/<model>",
+    fixed_models: Some(&CLOUDFLARE_MODELS),
+    ..BASE
+};
+
+const OLLAMA: Spec = Spec {
+    name: "ollama",
+    url: "http://localhost:11434",
+    model: "clef-flash",
+    models_path: Some("/api/tags"),
+    ..BASE
+};
+
+const OPENAI: Spec = Spec {
+    name: "openai",
+    url: "https://api.openai.com",
+    model: "gpt-6-luna",
+    request_id: Some("x-request-id"),
+    secret: Some(key::OPENAI_KEY),
+    path: "/v1/decisions",
+    models_path: Some("/v1/models"),
+    wire: Wire::Decisions,
+    ..BASE
+};
+
+const OPENAI_CHAT: Spec = Spec {
+    name: "openai-chat",
+    model: "gpt-4.1-mini",
+    path: "/v1/chat/completions",
+    wire: Wire::ChatLogprobs,
+    ..OPENAI
+};
+
+const CELERIS: Spec = Spec {
+    name: "celeris",
+    url: "https://inference.celeris.ai",
+    model: "celeris-1-decision",
+    secret: Some(key::CELERIS_KEY),
+    path: "/celeris-1-decision/v1/systemone",
+    ..BASE
+};
+
 impl Provider {
+    /// The provider's table entry.
+    const fn spec(self) -> &'static Spec {
+        match self {
+            Self::Typesafe => &TYPESAFE,
+            Self::Cloudflare => &CLOUDFLARE,
+            Self::Ollama => &OLLAMA,
+            Self::Openai => &OPENAI,
+            Self::OpenaiChat => &OPENAI_CHAT,
+            Self::Celeris => &CELERIS,
+        }
+    }
+
     /// Name as it is spelled on the command line.
     pub const fn name(self) -> &'static str {
-        match self {
-            Self::Typesafe => "typesafe",
-            Self::Cloudflare => "cloudflare",
-            Self::Ollama => "ollama",
-            Self::Openai => "openai",
-        }
+        self.spec().name
     }
 
     /// API root used when `--url` is not given.
     pub const fn default_url(self) -> &'static str {
-        match self {
-            Self::Typesafe => "https://api.typesafe.ai",
-            Self::Cloudflare => "https://api.cloudflare.com/client/v4",
-            Self::Ollama => "http://localhost:11434",
-            Self::Openai => "https://api.openai.com",
-        }
+        self.spec().url
     }
 
     /// Model used when `--model` is not given.
     pub const fn default_model(self) -> &'static str {
-        match self {
-            Self::Typesafe => "jev-latest",
-            Self::Cloudflare | Self::Ollama => "clef-flash",
-            Self::Openai => "gpt-4.1-mini",
-        }
+        self.spec().model
     }
 
     /// Legacy environment variable that overrides the base URL, if any.
     pub const fn url_env(self) -> Option<&'static str> {
-        match self {
-            Self::Typesafe => Some("TYPESAFE_API_URL"),
-            Self::Cloudflare | Self::Ollama | Self::Openai => None,
-        }
+        self.spec().url_env
+    }
+
+    /// Wire protocol the client has to speak.
+    pub const fn wire(self) -> Wire {
+        self.spec().wire
     }
 
     /// Adds Ollama's `keep_alive` to a request body when one was asked for.
@@ -82,70 +200,55 @@ impl Provider {
 
     /// Response header holding the id to quote in a bug report.
     pub const fn request_id_header(self) -> Option<&'static str> {
-        match self {
-            Self::Typesafe => Some("x-typesafe-request-id"),
-            Self::Cloudflare => Some("cf-ray"),
-            Self::Ollama => None,
-            Self::Openai => Some("x-request-id"),
-        }
+        self.spec().request_id
     }
 
     /// Keychain slot of the secret, or `None` when no credential is needed.
     pub const fn secret_slot(self) -> Option<Slot> {
-        match self {
-            Self::Typesafe => Some(key::TYPESAFE_KEY),
-            Self::Cloudflare => Some(key::CLOUDFLARE_TOKEN),
-            Self::Openai => Some(key::OPENAI_KEY),
-            Self::Ollama => None,
-        }
+        self.spec().secret
     }
 
     /// Keychain slot of the account id, for providers that put it in the URL.
     pub const fn account_slot(self) -> Option<Slot> {
-        match self {
-            Self::Cloudflare => Some(key::CLOUDFLARE_ACCOUNT),
-            Self::Typesafe | Self::Ollama | Self::Openai => None,
-        }
+        self.spec().account
     }
 
     /// URL that receives a System One request for `model`.
     pub fn system_one_url(self, base: &str, account: Option<&str>, model: &str) -> String {
-        match self {
-            Self::Typesafe | Self::Ollama => format!("{base}/v1/systemone"),
-            Self::Openai => format!("{base}/v1/chat/completions"),
-            Self::Cloudflare => format!(
-                "{base}/accounts/{}/ai/run/@cf/cloudflare/{}",
-                account.unwrap_or_default(),
-                model.trim()
-            ),
-        }
+        let path = self
+            .spec()
+            .path
+            .replace("<account>", account.unwrap_or_default())
+            .replace("<model>", model.trim());
+        format!("{base}{path}")
     }
 
     /// URL listing the available models, where the provider has one.
     pub fn models_url(self, base: &str) -> Option<String> {
-        match self {
-            Self::Typesafe | Self::Openai => Some(format!("{base}/v1/models")),
-            Self::Ollama => Some(format!("{base}/api/tags")),
-            Self::Cloudflare => None,
-        }
+        self.spec().models_path.map(|path| format!("{base}{path}"))
     }
 
     /// Rejects a model name the provider cannot serve, before any request.
     pub fn check_model(self, model: &str) -> Result<(), Error> {
-        if self == Self::Cloudflare && !CLOUDFLARE_MODELS.contains(&model.trim()) {
-            return Err(Error::Usage(format!(
-                "Cloudflare serves {}; got `{model}`. Pass --model clef-flash.",
-                CLOUDFLARE_MODELS.join(" and ")
-            )));
+        let spec = self.spec();
+        match spec.fixed_models {
+            Some(models) if !models.contains(&model.trim()) => Err(Error::Usage(format!(
+                "{} serves {}; got `{model}`. Pass --model {}.",
+                spec.name,
+                models.join(" and "),
+                spec.model
+            ))),
+            _ => Ok(()),
         }
-        Ok(())
     }
 
-    /// Models Cloudflare serves, for `jev models`, which has no listing endpoint to call.
+    /// Models a provider with a fixed set serves, for `jev models` when there is no listing endpoint to call.
     pub const fn static_models(self) -> Option<&'static [&'static str]> {
-        match self {
-            Self::Cloudflare => Some(&CLOUDFLARE_MODELS),
-            Self::Typesafe | Self::Ollama | Self::Openai => None,
+        let spec = self.spec();
+        if spec.models_path.is_none() {
+            spec.fixed_models
+        } else {
+            None
         }
     }
 }
@@ -181,9 +284,13 @@ mod tests {
     }
 
     #[test]
-    fn openai_uses_chat_completions_and_its_own_key() {
+    fn openai_uses_the_decisions_endpoint_and_openai_chat_uses_completions() {
         assert_eq!(
-            Provider::Openai.system_one_url("https://api.openai.com", None, "gpt-4.1-mini"),
+            Provider::Openai.system_one_url("https://api.openai.com", None, "gpt-6-luna"),
+            "https://api.openai.com/v1/decisions"
+        );
+        assert_eq!(
+            Provider::OpenaiChat.system_one_url("https://api.openai.com", None, "gpt-4.1-mini"),
             "https://api.openai.com/v1/chat/completions"
         );
         assert_eq!(
@@ -191,6 +298,22 @@ mod tests {
             Some("OPENAI_API_KEY")
         );
         assert!(Provider::Openai.account_slot().is_none());
+    }
+
+    #[test]
+    fn celeris_has_its_own_systemone_path_and_key() {
+        assert_eq!(
+            Provider::Celeris.system_one_url(
+                "https://inference.celeris.ai",
+                None,
+                "celeris-1-decision"
+            ),
+            "https://inference.celeris.ai/celeris-1-decision/v1/systemone"
+        );
+        assert_eq!(
+            Provider::Celeris.secret_slot().map(|s| s.env),
+            Some("CELERIS_API_KEY")
+        );
     }
 
     #[test]

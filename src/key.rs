@@ -65,6 +65,14 @@ pub const OPENAI_KEY: Slot = Slot {
     help: "Create one at https://platform.openai.com/api-keys (needs a billing balance)",
 };
 
+/// The Celeris API key.
+pub const CELERIS_KEY: Slot = Slot {
+    env: "CELERIS_API_KEY",
+    account: "CELERIS_API_KEY",
+    label: "Celeris API key",
+    help: "Create one at https://console.celeris.ai",
+};
+
 /// A credential plus a human-readable note about where it came from.
 pub struct Secret {
     value: String,

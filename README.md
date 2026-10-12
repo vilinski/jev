@@ -28,7 +28,9 @@ same `answers`; `jev` hides the differences.
 | `typesafe` (default) | `api.typesafe.ai` | API key, keychain or `TYPESAFE_API_KEY` | `jev-latest` |
 | `cloudflare` | Workers AI | API token + account id, keychain or `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` | `clef-flash` |
 | `ollama` | `localhost:11434` | none | `clef-flash` |
-| `openai` | `api.openai.com` | API key, keychain or `OPENAI_API_KEY` | `gpt-4.1-mini` |
+| `openai` (`oai`) | `api.openai.com/v1/decisions` (public beta) | API key, keychain or `OPENAI_API_KEY` | `gpt-6-luna` |
+| `openai-chat` | `api.openai.com` chat completions | same `OPENAI_API_KEY` | `gpt-4.1-mini` |
+| `celeris` (`cel`) | `inference.celeris.ai` | API key from <https://console.celeris.ai>, keychain or `CELERIS_API_KEY` | `celeris-1-decision` |
 
 Pick one with `--provider` (`-p`; `cf`, `ol` and `oai` work for `cloudflare`, `ollama` and `openai`), or once with `JEV_PROVIDER=cloudflare`. `--model` and
 `JEV_MODEL` override the default; `--url` / `JEV_URL` point at a gateway, a
@@ -37,7 +39,7 @@ different port or a mock.
 Cloudflare serves `clef` (27B) and `clef-flash` (9B), and `jev` rejects any other
 model name before sending anything. Its REST API puts the answer under a `result`
 key; `jev` removes that envelope so every provider prints the same shape.
-OpenAI has no decision endpoint, so `jev` asks each question as one chat
+`openai` calls OpenAI's own Decisions API (`POST /v1/decisions`, only `gpt-6-luna` so far, $0.10 per 1M input tokens, no output charge); `jev` translates the System One request into its `predicate`/`choice`/`score` array format and back. `openai-chat` is a do-it-yourself alternative for chat models: `jev` asks each question as one chat
 completion that must answer with a single token (`yes`/`no`, an option letter or
 a level digit) and reads the probabilities from that token's log-probabilities.
 The questions of a request run concurrently and come back in the usual shape;

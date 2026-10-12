@@ -62,6 +62,7 @@ fn jev() -> Command {
         "CLOUDFLARE_API_TOKEN",
         "CLOUDFLARE_ACCOUNT_ID",
         "OPENAI_API_KEY",
+        "CELERIS_API_KEY",
     ] {
         command.env_remove(var);
     }
@@ -300,7 +301,14 @@ fn openai_asks_chat_completions_and_turns_logprobs_into_probabilities() {
     let output = jev()
         .env("OPENAI_API_KEY", "sk_test_openai")
         .args([
-            "-p", "openai", "--url", &url, "noul", "Is it?", "-s", "hello",
+            "-p",
+            "openai-chat",
+            "--url",
+            &url,
+            "noul",
+            "Is it?",
+            "-s",
+            "hello",
         ])
         .output()
         .expect("run");
@@ -346,5 +354,53 @@ fn openai_login_stores_nothing_extra_and_missing_key_points_to_the_key_page() {
     assert!(
         text.contains("platform.openai.com/api-keys") || text.contains("keychain error"),
         "{text}"
+    );
+}
+
+#[test]
+fn celeris_posts_to_its_model_path_with_bearer_key() {
+    let (url, request) = mock(
+        r#"{"answers":{"answer":{"type":"noul","noul":0.9}},"usage":{"input_tokens":5,"output_tokens":0}}"#,
+    );
+    let output = jev()
+        .env("CELERIS_API_KEY", "cel_test_key")
+        .args(["-p", "cel", "--url", &url, "noul", "Is it?", "-s", "hello"])
+        .output()
+        .expect("run");
+    assert!(output.status.success(), "{}", stderr(&output));
+    let request = request.join().expect("mock");
+    assert!(
+        request.starts_with("POST /celeris-1-decision/v1/systemone "),
+        "{request}"
+    );
+    assert!(header_text(&request).contains("authorization: bearer cel_test_key"));
+    assert!(
+        request.contains(r#""model":"celeris-1-decision""#),
+        "{request}"
+    );
+}
+
+#[test]
+fn openai_posts_to_v1_decisions_and_maps_the_answers() {
+    let (url, request) =
+        mock(r#"{"answers":[{"name":"answer","type":"predicate","probability":0.75}]}"#);
+    let output = jev()
+        .env("OPENAI_API_KEY", "sk_test_openai")
+        .args([
+            "-p", "openai", "--url", &url, "noul", "Is it?", "-s", "hello",
+        ])
+        .output()
+        .expect("run");
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    let request = request.join().expect("mock");
+    assert!(request.starts_with("POST /v1/decisions "), "{request}");
+    assert!(request.contains(r#""model":"gpt-6-luna""#), "{request}");
+    assert!(request.contains(r#""type":"predicate""#), "{request}");
+    assert!(request.contains(r#""input":"hello""#), "{request}");
+    assert!(
+        stdout(&output).contains(r#""noul": 0.75"#),
+        "{}",
+        stdout(&output)
     );
 }

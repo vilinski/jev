@@ -12,6 +12,7 @@ use std::fmt::Write as _;
 use serde_json::{Map, Value, json};
 
 use crate::Error;
+use crate::util::round4;
 
 /// How many `top_logprobs` to request; the API allows up to 20.
 const TOP_LOGPROBS: u32 = 20;
@@ -37,14 +38,6 @@ pub struct Prepared {
     pub body: Value,
     /// How to read the answer.
     pub kind: Kind,
-}
-
-/// Renders the state for the prompt: text as is, structures as pretty JSON.
-pub fn render_state(state: &Value) -> String {
-    match state {
-        Value::String(text) => text.clone(),
-        other => serde_json::to_string_pretty(other).unwrap_or_else(|_ignored| other.to_string()),
-    }
 }
 
 /// Letter that labels the option at `index` (`A`, `B`, ...).
@@ -175,11 +168,6 @@ fn distribution(
         ));
     }
     Ok(mass.into_iter().map(|m| m / total).collect())
-}
-
-/// Rounds to four decimals, like the other providers' output.
-fn round4(value: f64) -> f64 {
-    (value * 10_000.0).round() / 10_000.0
 }
 
 /// `1 - H/ln(n)`: 1 for a certain answer, 0 for a uniform one.

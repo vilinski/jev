@@ -19,7 +19,7 @@ it never enters your context or the session transcript. Calling the API yourself
 puts a credential in the transcript and will be blocked anyway.
 
 **Providers.** `--provider typesafe` (default, model Jev), `-p cf` / `--provider cloudflare`
-(Clef, `clef` or `clef-flash`), `-p oai` / `--provider openai` (chat model via logprobs, default `gpt-4.1-mini`)
+(Clef, `clef` or `clef-flash`), `-p oai` / `--provider openai` (OpenAI Decisions API, `gpt-6-luna`), `--provider openai-chat` (chat model via logprobs, default `gpt-4.1-mini`), `-p cel` / `--provider celeris` (`celeris-1-decision`)
 and `-p ol` / `--provider ollama` (local Clef, no credential)
 take the same questions and print the same shape. Use the provider the user or
 project names; do not switch on your own, because calibration differs between
