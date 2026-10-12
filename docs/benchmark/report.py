@@ -117,7 +117,7 @@ HTML = f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name
 *{{box-sizing:border-box}}
 body{{margin:0;padding:24px;background:var(--bg);color:var(--ink);font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}}
 .back{{display:inline-block;margin:0 0 12px 4px;color:#5a58c8;text-decoration:none;font-size:13px}} .back:hover{{text-decoration:underline}}
-.app{{max-width:1120px;margin:0 auto;background:#fff;border:1px solid #e5e9ef;border-radius:16px;box-shadow:0 12px 40px #18212f12;overflow:hidden}}
+.app{{max-width:1320px;margin:0 auto;background:#fff;border:1px solid #e5e9ef;border-radius:16px;box-shadow:0 12px 40px #18212f12;overflow:hidden}}
 header{{padding:24px 28px 18px;border-bottom:1px solid var(--line)}}
 h1{{margin:0;font-size:23px;line-height:1.2;letter-spacing:-.025em}} h2{{margin:34px 0 8px;font-size:18px;letter-spacing:-.015em}} h3{{margin:0 0 2px;font-size:15px}}
 .sub,.hint,small{{color:var(--mut);font-size:12.5px;font-weight:400}} .sub{{margin:7px 0 8px;font-size:13px}} header .sub{{margin-bottom:0}} .dir{{font-weight:600}} .lg{{display:block}}

@@ -4,7 +4,7 @@ from site_lib import esc
 
 def bars(models, title, sub, vals, fmt, better, maxv=None, pairs=None):
     """One horizontal bar chart. vals: {key: value}; pairs: {key: (a, b)} draws two bars per model."""
-    W = 420; lab = 64; right = 64; rowh = 26 if not pairs else 40
+    W = 480; lab = 130; right = 64; rowh = 26 if not pairs else 40
     mv = maxv or max((max(v) if pairs else v) for v in (pairs or vals).values()) * 1.08 or 1
     rows = ""
     for i, m in enumerate(models):
@@ -22,7 +22,7 @@ def bars(models, title, sub, vals, fmt, better, maxv=None, pairs=None):
 
 def strip(models, own, ncalls=180):
     """Every call of every model as a dot on a log time axis, with p50 and p95 marked."""
-    W = 900; lab = 70; top = 24; rowh = 70
+    W = 900; lab = 130; top = 24; rowh = 70
     lo, hi = 0.3, 10.0; X = lambda v: lab + (W - lab - 20) * (math.log(v) - math.log(lo)) / (math.log(hi) - math.log(lo))
     g = ""
     for t in (0.3, 0.5, 1, 2, 5, 10):
