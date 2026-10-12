@@ -16,7 +16,7 @@ VERIFY = "K_8TwgTxZWlUlupLEKquy_fQknMYJndY3SvZoJqeFNk"   # Google Search Console
 CODING_MARK = 'property="og:title"'                      # present on a coding-agents page that already carries the generated meta
 PAGES = ["/", "/coding-agents/", "/decision-models/", "/jev-benchmark/"]
 D = json.load(open("data.json"))
-PTS, NOW, NPUB, PER = D["points"], D["date"], D["npub"], D["per"]
+PTS, NOW, NPUB, PER, HW = D["points"], D["date"], D["npub"], D["per"], round(D["hw"])
 CODING = open(sys.argv[1]).read()
 TEMPLATE = sys.argv[2] if len(sys.argv) > 2 else None
 for p in PAGES[1:]:
@@ -30,7 +30,7 @@ body = f'<g transform="translate(40 214)">{scatter(dm_points, W=1120, H=390, the
 og_frame(f"{OUT}/decision-models/og", "DECISION MODELS", "Accuracy vs. cost per decision", f"Five hosted models on {NPUB} public items, bubble = median latency", "#c0289c", body,
          footer=f"ai.vilinski.dev/decision-models · measured {NOW}")
 page_css = re.search(r"<style>(.*?)</style>", CODING, re.S).group(1)   # same look as the coding-agents page
-section = open("section.html").read().replace("__PTS__", json.dumps(PTS)).replace("{NOW}", NOW).replace("{NPUB}", str(NPUB)).replace("{PER}", str(PER))
+section = open("section.html").read().replace("__PTS__", json.dumps(PTS)).replace("{NOW}", NOW).replace("{NPUB}", str(NPUB)).replace("{PER}", str(PER)).replace("{HW}", str(HW))
 dm_title = "Decision models compared: accuracy vs. cost and speed"
 dm_desc = (f"Interactive scatter plot of five hosted decision models (Jev, Celeris-1, Clef, OpenAI Decisions, OpenAI chat) on {NPUB} items of the public jev-bench: "
            f"accuracy against cost per 1,000 decisions or latency, with 95% intervals and a Pareto frontier. Measured {NOW}.")

@@ -12,7 +12,8 @@ items=build(); rows=[]
 for r in range(reps):
     for it in items:
         o=call(prov,{"state":it["state"],"questions":{"q":it["q"]}})
-        o.update(id=it["id"],kind=it["kind"],gold=it["gold"],rep=r,warmup=(r==0 and it is items[0]))   # the first call pays a cold start; analysis leaves it out of latency; rows.append(o)
+        o.update(id=it["id"],kind=it["kind"],gold=it["gold"],rep=r,warmup=(r==0 and it is items[0]))   # the first call pays a cold start; analysis leaves it out of latency
+        rows.append(o)
         print(prov,r,it["id"],round(o["dt"],2),o["ok"],flush=True)
 # batching test: 10 questions about one state, batched vs separate
 st={"report":"Data stops arriving after ~6h; restarting the pod fixes it. Customers on the EU cluster notice gaps in dashboards."}

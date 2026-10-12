@@ -75,13 +75,19 @@ wrong_rows = "".join(f'<tr><td>{esc(text)}</td><td>{esc(gold)}</td>' + "".join(f
 # --- data for the interactive page (site.py) and the social image
 PTS = [dict(id=m.key, name=m.label, sub=m.sub, color=m.color, acc=round(H[m.key]["acc"], 4), lo=round(CI[m.key][0], 4), hi=round(CI[m.key][1], 4), brier=round(H[m.key]["brier"], 4),
             p50=round(H[m.key]["p50"] * 1000), p95=round(H[m.key]["p95"] * 1000), cost=round(HCOST[m.key] / 1000, 5), fail=H[m.key]["fail"], n=H[m.key]["n"], own=round(R[m.key]["acc_all"], 4)) for m in MODELS]
-json.dump({"date": now, "npub": NPUB, "per": PER, "points": PTS}, open("data.json", "w"), indent=1)
+json.dump({"date": now, "npub": NPUB, "per": PER, "hw": round(HW, 1), "points": PTS}, open("data.json", "w"), indent=1)
 
+def overlap(a, b):   # do the 95% intervals of two models overlap?
+    return not (CI[a][0] > CI[b][1] or CI[b][0] > CI[a][1])
+order = sorted(dedicated, key=lambda n: -H[n]["acc"])
+rank_text = (f"{M[order[0]].label} is the most accurate ({H[order[0]]['acc']:.0%}, 95% CI {CI[order[0]][0]:.0%}&ndash;{CI[order[0]][1]:.0%}) with the best Brier score ({min(H[n]['brier'] for n in dedicated):.3f}). "
+             + "Then " + ", ".join(f"{M[b].label} ({H[b]['acc']:.0%}, {100 * (H[a]['acc'] - H[b]['acc']):.0f} points behind {M[a].label}, {'intervals overlap' if overlap(a, b) else 'clearly separated'})" for a, b in zip(order, order[1:])) + "."
+             + f" The DIY chat adapter ({H[CHAT.key]['acc']:.0%}) is far behind because it cannot handle questions with more than 26 options (five datasets). The 95% intervals are about &plusmn;{HW:.1f} points wide.")
 J, Ce, Cl, OD, OC = (R[n] for n in ("Jev", "Celeris-1", "Clef", "OpenAI Decisions", CHAT.key))
-notes = f'''<p><b>Public benchmark.</b> On a {NPUB}-item sample of jev-bench, Celeris is clearly the most accurate ({H["Celeris-1"]["acc"]:.0%}, 95% CI {CI["Celeris-1"][0]:.0%}&ndash;{CI["Celeris-1"][1]:.0%}) and best calibrated (Brier {H["Celeris-1"]["brier"]:.3f}). Clef ({H["Clef"]["acc"]:.0%}) and Jev ({H["Jev"]["acc"]:.0%}) follow, then OpenAI Decisions ({H["OpenAI Decisions"]["acc"]:.0%}); the DIY chat adapter is far behind because it cannot handle questions with more than 26 options (five datasets). The 95% intervals are about &plusmn;{HW:.1f} points wide, so Celeris leads OpenAI Decisions clearly, while Clef and Jev are statistically tied.</p>
+notes = f'''<p><b>Public benchmark.</b> On a {NPUB}-item sample of jev-bench, {rank_text}</p>
 <p><b>Speed.</b> Jev ({J["lat"]["p50"]*1000:.0f} ms) and OpenAI Decisions ({OD["lat"]["p50"]*1000:.0f} ms) have the lowest median on my own set, Celeris is steady at {Ce["lat"]["p50"]*1000:.0f} ms, Clef is slower with a long tail (p95 {Cl["lat"]["p95"]*1000:.0f} ms, slowest call {Cl["lat"]["mx"]:.1f} s). Celeris advertises 67 ms from AWS us-east-1; from here, through the CLI with a new TLS handshake per call, every number is dominated by the network path. The first call of each run is left out as a cold start.</p>
-<p><b>My own 60-item set</b> is easy: all five models are within a few points of each other ({J["acc_all"]:.0%} to {Cl["acc_all"]:.0%}), and one answer is worth almost two points. OpenAI Decisions has the best calibration here (Brier {OD["brier"]["noul"]:.4f} yes/no, {OD["brier"]["choice"]:.4f} routing), Jev is the only model that answers every vague input with &ldquo;can&rsquo;t tell&rdquo; ({J["amb_abstain"]:.0%}), and the DIY chat adapter is nearly as confident when wrong ({OC["conf_bad"]:.2f}) as when right ({OC["conf_ok"]:.2f}). On the harder public data the ranking changes, which is the reason to trust the larger set more.</p>
-<p><b>Cost.</b> All four dedicated decision APIs cost between ${min(COST[n] for n in dedicated)/1000:.4f} and ${max(COST[n] for n in dedicated)/1000:.4f} per 1,000 single-question decisions on my short inputs, and ${min(HCOST[n] for n in dedicated)/1000:.4f} to ${max(HCOST[n] for n in dedicated)/1000:.4f} on the longer public-benchmark inputs, so a million decisions costs roughly $6 to $42. OpenAI Decisions is priced at $0.10 per million input tokens with no output charge; the DIY chat route costs about {COST[CHAT.key]/COST["Celeris-1"]:.0f}x Celeris on short inputs. Cost is a minor factor at small scale; accuracy and calibration matter more. Tokens are counted by each vendor&rsquo;s own tokenizer.</p>
+<p><b>My own 60-item set</b> is easy: all five models are within a few points of each other ({J["acc_all"]:.0%} to {Cl["acc_all"]:.0%}), and one answer is worth almost two points. OpenAI Decisions has the lowest routing Brier ({OD["brier"]["choice"]:.4f}) and a yes/no Brier ({OD["brier"]["noul"]:.4f}) that only the DIY adapter ({OC["brier"]["noul"]:.4f}) beats, Jev is the only model that answers every vague input with &ldquo;can&rsquo;t tell&rdquo; ({J["amb_abstain"]:.0%}), and the DIY chat adapter is nearly as confident when wrong ({OC["conf_bad"]:.2f}) as when right ({OC["conf_ok"]:.2f}). On the harder public data the ranking changes, which is the reason to trust the larger set more.</p>
+<p><b>Cost.</b> All four dedicated decision APIs cost between ${min(COST[n] for n in dedicated)/1000:.4f} and ${max(COST[n] for n in dedicated)/1000:.4f} per 1,000 single-question decisions on my short inputs, and ${min(HCOST[n] for n in dedicated)/1000:.4f} to ${max(HCOST[n] for n in dedicated)/1000:.4f} on the longer public-benchmark inputs, so a million decisions costs roughly ${min(COST[n] for n in dedicated):.0f} to ${max(HCOST[n] for n in dedicated):.0f}. OpenAI Decisions is priced at $0.10 per million input tokens with no output charge; the DIY chat route costs about {COST[CHAT.key]/COST["Celeris-1"]:.0f}x Celeris on short inputs. Cost is a minor factor at small scale; accuracy and calibration matter more. Tokens are counted by each vendor&rsquo;s own tokenizer.</p>
 <p><b>Caveats.</b> The public sample is {PER} items per dataset, one run, so differences under about {HW:.0f} points are inside the error margin. My own set is synthetic, small and easy, with 3 repeats. Latency comes from the <code>jev</code> CLI on one machine. Severity labels on my set are my own judgement. Scoring on jev-bench counts a failed or refused request as a uniform answer. jev-bench is published by a third party and has a mixed licence; I used only a small sample of its test splits. The OpenAI Decisions API is in public beta. No sponsorship or affiliation with any of these vendors.</p>'''
 
 # --- social preview and SEO
@@ -107,23 +113,34 @@ SEO = meta(URL, TITLE, DESC, "Bar chart: accuracy and cost per 1,000 decisions o
 HTML = f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{esc(TITLE)}</title>
 {SEO}
 <style>
-:root{{--bg:#fafaf7;--fg:#1b1b1b;--mut:#666;--card:#fff;--line:#e3e1da;--bad:#fbe3e0;--good:#e3f4e6}}
-@media(prefers-color-scheme:dark){{:root{{--bg:#16171a;--fg:#ececec;--mut:#9a9a9a;--card:#1f2024;--line:#33353a;--bad:#4a2522;--good:#1f3a25}}}}
-body{{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,sans-serif}} main{{max-width:1040px;margin:0 auto;padding:24px 16px 64px}}
-h1{{font-size:28px;margin:0}} h2{{margin-top:36px;font-size:20px}} h3{{margin:0 0 2px;font-size:15px}}
-.sub,.hint,small{{color:var(--mut);font-size:12.5px;font-weight:400}} .sub{{margin:0 0 8px}} .dir{{font-weight:600}} .lg{{display:block}}
+:root{{--ink:#18212f;--fg:#18212f;--mut:#657184;--line:#e4e9ef;--card:#fff;--bg:#f5f7fa;--bad:#fbe3e0;--good:#e3f4e6;--accent:#5e5bd8}}
+*{{box-sizing:border-box}}
+body{{margin:0;padding:24px;background:var(--bg);color:var(--ink);font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}}
+.back{{display:inline-block;margin:0 0 12px 4px;color:#5a58c8;text-decoration:none;font-size:13px}} .back:hover{{text-decoration:underline}}
+.app{{max-width:1120px;margin:0 auto;background:#fff;border:1px solid #e5e9ef;border-radius:16px;box-shadow:0 12px 40px #18212f12;overflow:hidden}}
+header{{padding:24px 28px 18px;border-bottom:1px solid var(--line)}}
+h1{{margin:0;font-size:23px;line-height:1.2;letter-spacing:-.025em}} h2{{margin:34px 0 8px;font-size:18px;letter-spacing:-.015em}} h3{{margin:0 0 2px;font-size:15px}}
+.sub,.hint,small{{color:var(--mut);font-size:12.5px;font-weight:400}} .sub{{margin:7px 0 8px;font-size:13px}} header .sub{{margin-bottom:0}} .dir{{font-weight:600}} .lg{{display:block}}
+.content{{padding:2px 28px 26px}}
 .grid2{{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px}} .wide{{grid-column:1/-1}}
-.card{{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px}}
+.card{{background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px 16px}}
 svg text{{fill:var(--fg)}} .lbl{{font-size:12.5px;font-weight:600}} .val{{font-size:12px;fill:var(--mut)}} .tick{{font-size:11px;fill:var(--mut)}} .mk{{font-size:11px;font-weight:600}} svg .mk{{fill:currentColor}}
 .grid{{stroke:var(--line);stroke-width:1}}
-.key{{display:flex;flex-wrap:wrap;gap:16px;margin:10px 0;font-weight:600}} .key i{{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:6px}}
-table{{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--line)}} th,td{{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top;font-size:14px}}
-a{{color:inherit}} td.bad{{background:var(--bad)}} td.good{{background:var(--good)}} .tw{{overflow-x:auto}} .note{{background:var(--card);border-left:4px solid #999;padding:4px 16px;border-radius:4px}}
-table.heat td{{text-align:center}}
-</style></head><body><main>
+.key{{display:flex;flex-wrap:wrap;gap:16px;margin:10px 0;font-weight:600;font-size:13px}} .key i{{display:inline-block;width:12px;height:12px;border-radius:50%;margin-right:6px}}
+table{{width:100%;border-collapse:collapse;background:#fff;border:1px solid var(--line)}} th,td{{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top;font-size:13px}}
+th{{background:#fbfcfe;color:#687487;font-size:11px;letter-spacing:.05em;text-transform:uppercase}}
+a{{color:#5a58c8;text-decoration:none}} a:hover{{text-decoration:underline}} td.bad{{background:var(--bad)}} td.good{{background:var(--good)}} .tw{{overflow-x:auto}} .note{{background:#fbfcfe;border-left:4px solid var(--accent);padding:4px 16px;border-radius:4px}}
+table.heat td{{text-align:center}} footer{{border-top:1px solid var(--line);padding:11px 28px 13px;color:#788396;font-size:11px}} footer .sub{{margin:0;font-size:11px}}
+@media (max-width:850px){{body{{padding:8px}} header,.content,footer{{padding-left:18px;padding-right:18px}}}}
+</style></head><body>
+<a class="back" href="/">&larr; All charts</a>
+<main class="app">
+<header>
 <h1>Decision API benchmark: Jev, Celeris, Clef and OpenAI</h1>
 <p class="sub">{now} · by <a rel="author" href="{PROFILE}">Andreas Vilinski</a> · two test sets, run via the <a href="{REPO}"><code>jev</code> CLI</a> with one question per call: {NPUB} items from the public jev-bench ({PER} per dataset) and my own 60 labelled items × 3 runs. OpenAI Decisions = <code>gpt-6-luna</code> on <code>/v1/decisions</code> (public beta); OpenAI chat (DIY) = <code>gpt-4.1-mini</code> read through token log-probabilities</p>
-<p class="sub"><a href="/">&larr; All charts</a> · <a href="{DM_URL}">Interactive scatter plot: accuracy against cost and speed</a></p>
+<p class="sub" style="margin-top:6px"><a href="{DM_URL}">Interactive scatter plot: accuracy against cost and speed</a></p>
+</header>
+<div class="content">
 <div class="key">{"".join(f'<span><i style="background:{m.color}"></i>{esc(m.key)}</span>' for m in MODELS)}</div>
 <h2>Speed</h2><p class="sub">Every call on my 60-item set, then median, tail and batching. First call of each run left out (cold start).</p><div class="grid2">{"".join(charts[:5])}</div>
 <h2>Accuracy on public data: jev-bench sample</h2><p class="sub">Real, public data in the System One format: <a href="https://huggingface.co/datasets/Praveenrajus/jev-bench">Praveenrajus/jev-bench</a> (22 datasets such as MNLI, BoolQ, Banking77, MMLU, SST-5), {PER} test items per dataset. Same questions to every model, scored by accuracy of the top option and the Brier score.</p>{pub_tbl}<h3 style="margin-top:18px">Accuracy per dataset</h3>{pub_heat}
@@ -135,6 +152,7 @@ table.heat td{{text-align:center}}
 <h2>More numbers</h2><div class="tw"><table><tr><th>Metric</th>{th}</tr>{tbl}</table></div>
 <h2>Items where a model was wrong (my set, majority of 3 runs)</h2><div class="tw"><table><tr><th>Text</th><th>Gold</th>{th}</tr>{wrong_rows}</table></div>
 <h2>Reading the results</h2><div class="note">{notes}</div>
-<footer class="sub" style="margin-top:32px">Measured with <a href="{REPO}">jev</a>, a Rust CLI for typed decision models (TypeSafe Jev, Celeris, Cloudflare Clef, Ollama, OpenAI). Source, benchmark scripts and raw results: <a href="{REPO}/tree/main/docs/benchmark">{REPO.replace("https://", "")}</a>. Generated {now}.</footer>
+</div>
+<footer class="sub">Measured with <a href="{REPO}">jev</a>, a Rust CLI for typed decision models (TypeSafe Jev, Celeris, Cloudflare Clef, Ollama, OpenAI). Source, benchmark scripts and raw results: <a href="{REPO}/tree/main/docs/benchmark">{REPO.replace("https://", "")}</a>. Generated {now}.</footer>
 </main></body></html>'''
 open("report.html", "w").write(HTML)
