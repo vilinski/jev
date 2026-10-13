@@ -92,7 +92,7 @@ def scatter(points, *, W=1080, H=520, theme=None, font=1.0, ypad=.05, xticks=(),
     X = lambda v: m["l"] + (math.log10(v) - xlo) / (xhi - xlo) * (W - m["l"] - m["r"])
     Y = lambda v: H - m["b"] - (v - ylo) / (yhi - ylo) * (H - m["t"] - m["b"])
     fs = lambda n: f'font-size="{n * font:.1f}"'
-    g = '<defs><linearGradient id="zg" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#2caa72" stop-opacity="0"/><stop offset="1" stop-color="#2caa72" stop-opacity=".16"/></linearGradient></defs>'
+    g = '<defs><linearGradient id="zg" x1="1" y1="1" x2="0" y2="0"><stop offset="0" stop-color="#2caa72" stop-opacity="0"/><stop offset="1" stop-color="#2caa72" stop-opacity=".16"/></linearGradient></defs>'
     g += f'<rect x="{m["l"]}" y="{m["t"]}" width="{W - m["l"] - m["r"]}" height="{H - m["t"] - m["b"]}" fill="url(#zg)"/>'
     for v in xticks:
         if xlo < math.log10(v) < xhi:
