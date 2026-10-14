@@ -12,8 +12,8 @@ returns calibrated probabilities that code can branch on.
 ## Rules
 
 **1. Call `jev`. Never call the API directly.** Do not `curl api.typesafe.ai` or
-the Cloudflare Workers AI endpoint, do not read or echo `TYPESAFE_API_KEY` or
-`CLOUDFLARE_API_TOKEN` or `OPENAI_API_KEY`, do not write your own HTTP client for them. The
+the Cloudflare Workers AI endpoint, do not read or echo any API key or token
+(`*_API_KEY`, `*_API_TOKEN`), do not write your own HTTP client for them. The
 credential lives in the OS keychain and `jev` reads it inside its own process, so
 it never enters your context or the session transcript. Calling the API yourself
 puts a credential in the transcript and will be blocked anyway.
@@ -41,6 +41,8 @@ have said.
 
 ```
 jev check                         credential source and API reachability
+jev login                         store the credential in the keychain (the user runs it, it needs a terminal)
+jev logout                        remove it
 jev models                        available models
 jev run <file.json|->             full request body (use this for batches)
 jev noul   <question>             yes/no -> probability
@@ -119,8 +121,9 @@ async. `jev` is for the shell and for agent-initiated judgments.
 
 Timeouts, `429` and `5xx` (including `529 Overloaded`) are retried twice by default
 with backoff and jitter, honouring `retry-after`. `--retries 0` disables it. A `422`
-means the request body is malformed — check the question shape, not the state. Every
-call prints a request id to stderr; quote it when reporting a problem to TypeSafe.
+means the request body is malformed — check the question shape, not the state.
+typesafe, cloudflare, openai and openai-chat print `request: <id>` to stderr; quote it
+when reporting a problem to that provider. ollama and celeris send no request id.
 
 ## Writing the questions
 
