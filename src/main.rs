@@ -336,9 +336,13 @@ fn login(provider: Provider) -> Result<(), Error> {
             provider.name()
         )));
     };
-    eprint!("{} (not echoed): ", secret_slot.label);
-    std::io::Write::flush(&mut std::io::stderr()).map_err(Error::Io)?;
-    let secret = rpassword::read_password().map_err(Error::Io)?;
+    let secret = rpassword::prompt_password(format!("{} (not echoed): ", secret_slot.label))
+        .map_err(|error| {
+            Error::Usage(format!(
+                "cannot read the key from a terminal ({error}). Run `jev login` in an interactive terminal, or set {} instead. {}",
+                secret_slot.env, secret_slot.help
+            ))
+        })?;
     key::store(secret_slot, &secret)?;
     drop(secret);
     eprintln!("stored in keychain {}", key::location(secret_slot));
