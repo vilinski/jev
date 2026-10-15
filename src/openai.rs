@@ -1,7 +1,7 @@
 //! Adapter that answers System One questions with `OpenAI` chat completions.
 //!
-//! `OpenAI` has no decision endpoint, so each question becomes one chat
-//! completion whose reply is a single token (`yes`/`no`, an option letter or a
+//! Used by `openai-chat`: each question becomes one chat completion whose
+//! reply is a single token (`yes`/`no`, an option letter or a
 //! level digit). The probabilities come from the token log-probabilities of
 //! that one position, which gives the same distribution-shaped answer the
 //! System One providers return. Needs a model that supports `logprobs`
@@ -171,7 +171,7 @@ fn distribution(
 }
 
 /// `1 - H/ln(n)`: 1 for a certain answer, 0 for a uniform one.
-fn concentration(probabilities: &[f64]) -> f64 {
+pub fn concentration(probabilities: &[f64]) -> f64 {
     let entropy: f64 = probabilities
         .iter()
         .filter(|p| **p > 0.0)

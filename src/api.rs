@@ -155,10 +155,12 @@ impl Client {
         let url = self
             .provider
             .system_one_url(&self.base, self.account.as_deref(), model);
-        let result = match self.provider.wire() {
+        let result = match self.provider.wire(model) {
             Wire::SystemOne => self.execute(&Method::POST, &url, Some(body)).await,
             Wire::Decisions => self.decisions_system_one(&url, body, model).await,
-            Wire::ChatLogprobs => self.openai_system_one(&url, body, model).await,
+            Wire::ChatLogprobs | Wire::ChatStructured => {
+                self.openai_system_one(&url, body, model).await
+            }
         };
         match &result {
             Ok(response) => {
@@ -213,9 +215,17 @@ impl Client {
             .and_then(Value::as_object)
             .ok_or_else(|| Error::Usage("the request needs a `questions` object".to_owned()))?;
         let state = util::render_state(body.get("state").unwrap_or(&Value::Null));
+        let structured = self.provider.wire(model) == Wire::ChatStructured;
         let prepared = questions
             .iter()
-            .map(|(id, question)| Ok((id, openai::prepare(model, &state, question)?)))
+            .map(|(id, question)| {
+                let item = if structured {
+                    crate::structured::prepare(model, &state, question)?
+                } else {
+                    openai::prepare(model, &state, question)?
+                };
+                Ok((id, item))
+            })
             .collect::<Result<Vec<_>, Error>>()?;
         let replies = futures_util::future::join_all(
             prepared
@@ -225,21 +235,38 @@ impl Client {
         .await;
 
         let mut answers = serde_json::Map::new();
-        let (mut input, mut output) = (0_u64, 0_u64);
+        let mut provider_responses = serde_json::Map::new();
+        let (mut input, mut output, mut cached) = (0_u64, 0_u64, 0_u64);
         let mut request_id = None;
         for ((id, item), reply) in prepared.iter().zip(replies) {
             let reply = reply?;
             let (reply_in, reply_out) = token_totals(&reply.body);
             input += reply_in;
             output += reply_out;
+            cached += reply
+                .body
+                .pointer("/usage/prompt_tokens_details/cached_tokens")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
             request_id = request_id.or(reply.request_id);
-            answers.insert((*id).clone(), openai::interpret(item, &reply.body)?);
+            let answer = if structured {
+                crate::structured::interpret(item, &reply.body)
+                    .unwrap_or_else(|error| json!({"type":"refusal", "reason":error.to_string()}))
+            } else {
+                openai::interpret(item, &reply.body)?
+            };
+            if structured {
+                provider_responses.insert((*id).clone(), reply.body);
+            }
+            answers.insert((*id).clone(), answer);
         }
         Ok(Response {
             body: json!({
                 "model": model,
                 "answers": answers,
-                "usage": { "input_tokens": input, "output_tokens": output },
+                "provider_responses": provider_responses,
+                "usage": { "input_tokens": input, "output_tokens": output, "input_tokens_details": { "cached_tokens": cached } },
+                "adapter": if structured { "self-reported-json-probabilities;thinking-disabled" } else { "token-logprobs" },
             }),
             request_id,
         })
@@ -379,7 +406,7 @@ impl Client {
     /// Proves the credential, account and model work, returning what was done.
     /// Providers without a model listing get one tiny test request instead.
     pub async fn probe(&self, model: &str) -> Result<&'static str, Error> {
-        if self.provider.models_url(&self.base).is_some() {
+        if self.provider != Provider::Openrouter && self.provider.models_url(&self.base).is_some() {
             self.models().await?;
             return Ok("reachable");
         }

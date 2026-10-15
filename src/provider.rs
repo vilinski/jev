@@ -16,8 +16,8 @@ use crate::key::{self, Slot};
 pub enum Provider {
     /// `TypeSafe`'s hosted Jev (`api.typesafe.ai`).
     Typesafe,
-    /// Cloudflare Workers AI, serving `clef` and `clef-flash`.
-    #[value(alias = "cf")]
+    /// Cloudflare Workers AI, serving `clef`, `clef-flash`, and `clef-omni`.
+    #[value(aliases = ["cf", "clef"])]
     Cloudflare,
     /// A local Ollama server running `clef` or `clef-flash`; needs no credential.
     #[value(alias = "ol")]
@@ -30,6 +30,9 @@ pub enum Provider {
     /// Celeris-1 Decision, a hosted diffusion model with a System One endpoint.
     #[value(alias = "cel")]
     Celeris,
+    /// `OpenRouter`'s System One gateway for hosted decision models.
+    #[value(alias = "or")]
+    Openrouter,
 }
 
 /// How a provider's HTTP API relates to the System One request `jev` builds.
@@ -42,6 +45,8 @@ pub enum Wire {
     Decisions,
     /// `OpenAI` chat completions, one per question: translated by [`crate::openai`].
     ChatLogprobs,
+    /// A generative model prompted for JSON probabilities, rather than token logprobs.
+    ChatStructured,
 }
 
 /// Everything that differs between providers, as data.
@@ -71,7 +76,10 @@ struct Spec {
 }
 
 /// Models Cloudflare accepts in the `model` field and URL path.
-const CLOUDFLARE_MODELS: [&str; 2] = ["clef", "clef-flash"];
+const CLOUDFLARE_MODELS: [&str; 3] = ["clef", "clef-flash", "clef-omni"];
+
+/// Celeris models, with chat models adapted separately from the decision endpoint.
+const CELERIS_MODELS: [&str; 3] = ["celeris-1-decision", "celeris-1", "celeris-1-magnus"];
 
 /// A `Spec` with the common defaults: no credential, no restrictions, plain System One.
 const BASE: Spec = Spec {
@@ -145,6 +153,16 @@ const CELERIS: Spec = Spec {
     model: "celeris-1-decision",
     secret: Some(key::CELERIS_KEY),
     path: "/celeris-1-decision/v1/systemone",
+    fixed_models: Some(&CELERIS_MODELS),
+    ..BASE
+};
+
+const OPENROUTER: Spec = Spec {
+    name: "openrouter",
+    url: "https://openrouter.ai/api",
+    model: "typesafe/jev-1.13",
+    secret: Some(key::OPENROUTER_KEY),
+    models_path: Some("/v1/models?output_modalities=decisions"),
     ..BASE
 };
 
@@ -158,6 +176,7 @@ impl Provider {
             Self::Openai => &OPENAI,
             Self::OpenaiChat => &OPENAI_CHAT,
             Self::Celeris => &CELERIS,
+            Self::Openrouter => &OPENROUTER,
         }
     }
 
@@ -182,8 +201,12 @@ impl Provider {
     }
 
     /// Wire protocol the client has to speak.
-    pub const fn wire(self) -> Wire {
-        self.spec().wire
+    pub fn wire(self, model: &str) -> Wire {
+        if self == Self::Celeris && matches!(model.trim(), "celeris-1" | "celeris-1-magnus") {
+            Wire::ChatStructured
+        } else {
+            self.spec().wire
+        }
     }
 
     /// Adds Ollama's `keep_alive` to a request body when one was asked for.
@@ -215,9 +238,12 @@ impl Provider {
 
     /// URL that receives a System One request for `model`.
     pub fn system_one_url(self, base: &str, account: Option<&str>, model: &str) -> String {
-        let path = self
-            .spec()
-            .path
+        let template = if self.wire(model) == Wire::ChatStructured {
+            "/<model>/v1/chat/completions"
+        } else {
+            self.spec().path
+        };
+        let path = template
             .replace("<account>", account.unwrap_or_default())
             .replace("<model>", model.trim());
         format!("{base}{path}")
@@ -228,7 +254,7 @@ impl Provider {
         self.spec().models_path.map(|path| format!("{base}{path}"))
     }
 
-    /// Rejects a model name the provider cannot serve, before any request.
+    /// Rejects a model outside a provider's fixed protocol-specific set.
     pub fn check_model(self, model: &str) -> Result<(), Error> {
         let spec = self.spec();
         match spec.fixed_models {
@@ -279,6 +305,7 @@ mod tests {
     fn cloudflare_rejects_jev_model_names() {
         assert!(Provider::Cloudflare.check_model("jev-latest").is_err());
         assert!(Provider::Cloudflare.check_model("clef").is_ok());
+        assert!(Provider::Cloudflare.check_model("clef-omni").is_ok());
         assert!(Provider::Cloudflare.check_model(" clef-flash ").is_ok());
         assert!(Provider::Typesafe.check_model("jev-latest").is_ok());
     }

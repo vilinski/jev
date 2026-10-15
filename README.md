@@ -20,23 +20,112 @@ or a hand-written rule per case.
 
 ## Providers
 
-All four speak the same request (`model`, `state`, `questions`) and return the
+All providers accept the same request (`model`, `state`, `questions`) and return the
 same `answers`; `jev` hides the differences.
 
-| `--provider` | Where it runs | Credential | Default model |
+`-p` / `--provider` selects the service and its credentials; `-m` / `--model`
+selects a model at that service. The CLI's default provider is `typesafe`.
+`JEV_PROVIDER` and `JEV_MODEL` set the same options through the environment.
+`--url` / `JEV_URL` override the API root for a gateway, a different port or a mock.
+
+| Provider (`-p`) | Default chosen by `jev` | Selectable model IDs (`-m`) | Equivalent OpenRouter decision IDs |
 |---|---|---|---|
-| `typesafe` (default) | `api.typesafe.ai` | API key, keychain or `TYPESAFE_API_KEY` | `jev-latest` |
-| `cloudflare` | Workers AI | API token + account id, keychain or `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` | `clef-flash` |
-| `ollama` | `localhost:11434` | none | `clef-flash` |
-| `openai` (`oai`) | `api.openai.com/v1/decisions` (public beta) | API key, keychain or `OPENAI_API_KEY` | `gpt-6-luna` |
-| `openai-chat` | `api.openai.com` chat completions | same `OPENAI_API_KEY` | `gpt-4.1-mini` |
-| `celeris` (`cel`) | `inference.celeris.ai` | API key from <https://console.celeris.ai>, keychain or `CELERIS_API_KEY` | `celeris-1-decision` |
+| `typesafe` | `jev-latest` | any TypeSafe model ID, including pinned versions and aliases | `typesafe/jev-1.13`, `typesafe/jev-1.14`, `~typesafe/jev-latest` |
+| `cloudflare` (`clef`, `cf`) | `clef-flash` | `clef`, `clef-flash`, `clef-omni` | `cloudflare/clef`, `cloudflare/clef-flash`, `cloudflare/clef-omni` |
+| `ollama` (`ol`) | `clef-flash` | locally installed System One models (`jev -p ollama models`) | depends on the locally installed model |
+| `openai` (`oai`) | `gpt-6-luna` | `gpt-6-luna` (Decisions API) | `openai/gpt-6-luna-decisions` |
+| `openai-chat` | `gpt-4.1-mini` | chat models supporting logprobs, e.g. `gpt-4.1-mini`, `gpt-4.1`, `gpt-4o` | chat models use a different endpoint, outside `jev -p openrouter` |
+| `celeris` (`cel`) | `celeris-1-decision` | `celeris-1-decision`, `celeris-1`, `celeris-1-magnus` | absent from the current decision catalogue |
+| `openrouter` (`or`) | `typesafe/jev-1.13` | qualified decision model IDs from the live catalogue: `jev -p openrouter models` | same ID |
 
-Pick one with `--provider` (`-p`; `cf`, `ol` and `oai` work for `cloudflare`, `ollama` and `openai`), or once with `JEV_PROVIDER=cloudflare`. `--model` and
-`JEV_MODEL` override the default; `--url` / `JEV_URL` point at a gateway, a
-different port or a mock.
+These are **`jev` defaults**, selected by the CLI when neither `-m` nor
+`JEV_MODEL` is set. `jev` always sends an explicit `model` to the service; it does
+not rely on a service-side default. With `jev run`, a `model` in the request JSON
+takes precedence over `-m`, `JEV_MODEL`, and the CLI default.
 
-Cloudflare serves `clef` (27B) and `clef-flash` (9B), and `jev` rejects any other
+OpenRouter's System One API requires `model`; it has no implicit default for this
+endpoint. The fallback `typesafe/jev-1.13` above is our CLI's choice, not an
+OpenRouter preference. See the
+[System One request contract](https://openrouter.ai/docs/guides/community/typesafe-sdk).
+
+Jev 1.14 is selected explicitly with `-p typesafe -m jev-1.14.0` or
+`-p openrouter -m typesafe/jev-1.14`. As of 2026-10-15, TypeSafe
+`jev-preview` points to 1.14; `jev-latest` still points to 1.13.
+Use versioned IDs for reproducible comparisons.
+
+Example OpenRouter decision IDs (use `-p openrouter -m <id>`):
+
+| Model author | OpenRouter model IDs (`-m`) |
+|---|---|
+| Perplexity | `perplexity/pplx-decider-v1.1-27b`, `~perplexity/pplx-decider-latest` |
+| Nace.AI | `nace-ai/drex-v1.5`, `nace-ai/drex-v2.0` |
+| Microsoft | `microsoft/microsoft-decision-1` |
+| Inception | `inception/mercury-decide`, `inception/mercury-decide:free` |
+| Upstage | `upstage/solar-decide`, `upstage/solar-decide-flash` |
+| Liquid AI | `liquid/d1` |
+| ScaleDown | `scaledown/classify-1` |
+| Jared Palmer | `jaredpalmer/kev-4b` |
+
+OpenRouter model IDs are not compiled into the CLI. `jev -p openrouter models`
+returns the provider's current
+[decision catalogue](https://openrouter.ai/api/v1/models?output_modalities=decisions).
+Pass a qualified ID with `-m`; new versions using the same System One protocol
+do not require a CLI update. The inference request goes straight to the gateway,
+which validates model availability. No catalogue lookup is added to each call.
+The catalogue's `decisions` modality does not guarantee support for every
+question type or option count; provider capability errors remain visible.
+
+Every supported OpenRouter model uses `POST /api/v1/systemone` with
+`model`, `state`, and `questions`; responses contain `answers` keyed by question ID:
+
+| Question type | Typed answer fields |
+|---|---|
+| `noul` | `type`, `noul` (probability of yes) |
+| `choice` | `type`, `choice`, `probabilities`, `confidence` |
+| `score` | `type`, `score`, `probabilities`, `confidence` |
+
+OpenRouter handles upstream protocol differences, including OpenAI's Decisions
+API. `jev` sends the same System One JSON and reads the same answer fields for all
+approved models, without a model-specific prompt or chat fallback. With `--raw`,
+OpenRouter can also return `model`, `usage`, `id`, and `provider`. Context limits,
+accepted media, and model accuracy still vary. All 18 underlying hosted models were smoke-tested live on 2026-10-14;
+aliases and free access routes are not separate model benchmarks.
+
+Model-specific capability limits:
+
+| OpenRouter ID | Status in `jev` | Reason |
+|---|---|---|
+| `togethercomputer/tev1-4b-experimental` | live verified | OpenRouter translates its upstream chat model into System One probabilities; at most 20 options on this route |
+| `respan/span-01`, `respan/span-01-lite`, `respan/span-01-lite:free` | live verified for `noul` | State must be a string or a supported conversation object; `choice` and `score` are rejected by the gateway |
+| other decision model IDs | forwarded to the gateway | availability and supported question shapes are determined by the provider |
+
+| Provider | API root | Credential (keychain or environment) |
+|---|---|---|
+| `typesafe` | `https://api.typesafe.ai` | `TYPESAFE_API_KEY` |
+| `cloudflare` (`clef`, `cf`) | `https://api.cloudflare.com/client/v4` | `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` |
+| `ollama` (`ol`) | `http://localhost:11434` | none |
+| `openai` (`oai`), `openai-chat` | `https://api.openai.com` | `OPENAI_API_KEY` |
+| `celeris` (`cel`) | `https://inference.celeris.ai` | `CELERIS_API_KEY` (create at <https://console.celeris.ai>) |
+| `openrouter` (`or`) | `https://openrouter.ai/api` | `OPENROUTER_API_KEY` |
+
+For example, these call the same Clef model through different services and keys:
+
+```sh
+jev -p clef -m clef-omni noul 'Is this urgent?' -s 'Production is down'
+jev -p openrouter -m cloudflare/clef-omni noul 'Is this urgent?' -s 'Production is down'
+```
+
+OpenAI Decisions is also available directly or through OpenRouter:
+
+```sh
+jev -p openai -m gpt-6-luna noul 'Is this urgent?' -s 'Production is down'
+jev -p openrouter -m openai/gpt-6-luna-decisions noul 'Is this urgent?' -s 'Production is down'
+```
+
+Use one model name per call: `-p clef -m clef`, `-p clef -m clef-flash`, or
+`-p clef -m clef-omni`. `jev -p <provider> models` lists that provider's model IDs.
+
+Cloudflare serves `clef` (27B), `clef-flash` (9B), and `clef-omni` (30B MoE, 3B active), and `jev` rejects any other
 model name before sending anything. Its REST API puts the answer under a `result`
 key; `jev` removes that envelope so every provider prints the same shape.
 `openai` calls OpenAI's own Decisions API (`POST /v1/decisions`, only `gpt-6-luna` so far, $0.10 per 1M input tokens, no output charge); `jev` translates the System One request into its `predicate`/`choice`/`score` array format and back. `openai-chat` is a do-it-yourself alternative for chat models: `jev` asks each question as one chat
@@ -48,6 +137,24 @@ The questions of a request run concurrently and come back in the usual shape;
 and choices are limited to 26 options and scores to 10 levels. Because the
 prompt is written by `jev`, an OpenAI result measures that prompt as much as
 the model. Cost is one request per question, so batching saves latency, not money.
+Celeris supports `-m celeris-1-decision`, `-m celeris-1`, and
+`-m celeris-1-magnus`. The decision model uses its native System One endpoint.
+The two generative models use a JSON-schema chat adapter with thinking disabled:
+its probabilities are model-reported judgments, rather than decision-head or
+first-token logprobs. Their generated output and cached input are included in
+reported usage and billing. This adapter has no 26-option letter limit.
+
+OpenRouter accepts qualified model names, for example
+`jev -p openrouter -m nace-ai/drex-v2.0 noul 'Is this urgent?' -s 'Production is down'`.
+Use `jev login -p openrouter` to store the key locally. `jev models -p openrouter`
+lists the gateway's current decision catalogue.
+Model IDs are passed through without a compiled allowlist; a vendor's direct model ID may differ, and not
+every direct-provider model is offered. For example, the Clef family uses
+`cloudflare/clef`, `cloudflare/clef-flash`, and `cloudflare/clef-omni` there.
+`latest` aliases and `:free` routes can
+refer to the same underlying model at a different tariff. Gateway rates can
+differ from a vendor's direct rates, so benchmark results record the route.
+
 Ollama needs a model pulled first (`ollama pull clef-flash`, about 11 GB) and
 `--keep-alive 30m` (or `JEV_KEEP_ALIVE`) keeps it loaded between calls.
 
@@ -93,6 +200,7 @@ Linux, Credential Manager on Windows:
 |---|---|
 | typesafe | `TYPESAFE_API_KEY` |
 | cloudflare | `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` |
+| openrouter | `OPENROUTER_API_KEY` |
 | openai | `OPENAI_API_KEY` |
 
 ### Overriding the stored credential
@@ -123,7 +231,7 @@ request id when reporting a problem (`x-typesafe-request-id` for TypeSafe, the
 `cf-ray` id for Cloudflare).
 
 `jev check` against Cloudflare sends one tiny test request, because Workers AI has
-no endpoint that lists decision models; `jev models` prints the documented pair.
+no endpoint that lists decision models; `jev -p clef models` prints the three supported models.
 
 Timeouts, rate limits (`429`) and server errors (`5xx`, including `529
 Overloaded`) are retried twice by default with exponential backoff and jitter,
@@ -266,7 +374,7 @@ See [Langfuse's OpenTelemetry guide](https://langfuse.com/integrations/native/op
 
 A measured comparison of Jev, Clef and OpenAI (latency, accuracy, calibration) is published at
 <https://ai.vilinski.dev/jev-benchmark/>; its scripts and raw results are in
-[`docs/benchmark`](docs/benchmark). The notes below are from everyday use against the three providers; numbers are one machine's.
+[`jev-benchmarks`](https://github.com/vilinski/jev-benchmarks). The notes below are from everyday use against the three providers; numbers are one machine's.
 
 * **Cloudflare validates question ids.** Ids must match `^[A-Za-z0-9_.-]{1,100}$`.
   An id such as `gate::urgent` is accepted by TypeSafe but rejected by Cloudflare with
@@ -322,3 +430,11 @@ See the [primitives](https://docs.typesafe.ai/primitives),
 
 Licensed under either of [Apache License 2.0](LICENSE-APACHE) or
 [MIT license](LICENSE-MIT) at your option.
+
+### Measured API behaviour (2026-10-14)
+
+- `jev check -p openrouter` now sends a small inference request. The model catalogue is public, so listing it alone cannot validate the credential.
+- OpenRouter Solar Decide and Solar Decide Flash accept at most 26 candidates on the tested route. Tev1 accepts at most 20. A catalogue's decisions modality does not imply support for every question shape.
+- Respan supports `noul` with text or its conversation state format. ScaleDown requires text or its document state format and string choice descriptions.
+- For Celeris generative models, invalid JSON probabilities become a typed `refusal`. Their already incurred input/cache/output usage and original `provider_responses` are retained in `--raw` output; an invalid distribution is never silently renormalised into a decision. Consumers must inspect the answer type.
+- Benchmarks record model and provider separately. Token usage, the output token rate, API-reported cost, and account credits are distinct quantities.

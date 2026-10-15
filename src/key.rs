@@ -73,6 +73,14 @@ pub const CELERIS_KEY: Slot = Slot {
     help: "Create one at https://console.celeris.ai",
 };
 
+/// The `OpenRouter` API key, used by its System One decision gateway.
+pub const OPENROUTER_KEY: Slot = Slot {
+    env: "OPENROUTER_API_KEY",
+    account: "OPENROUTER_API_KEY",
+    label: "OpenRouter API key",
+    help: "Create one at https://openrouter.ai/settings/keys",
+};
+
 /// A credential plus a human-readable note about where it came from.
 pub struct Secret {
     value: String,

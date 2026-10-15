@@ -17,6 +17,7 @@ mod decisions;
 mod key;
 mod openai;
 mod provider;
+mod structured;
 mod telemetry;
 mod util;
 
@@ -64,13 +65,19 @@ enum Error {
 
 /// Ask a decision model (Jev, Clef) typed questions about some state.
 #[derive(Debug, Parser)]
-#[command(name = "jev", version, about, long_about = None)]
+#[command(
+    name = "jev",
+    version,
+    about,
+    long_about = None,
+    after_help = "Examples:\n  jev -p clef -m clef-omni noul 'Is this urgent?' -s 'Production is down'\n  jev -p openrouter -m cloudflare/clef-omni noul 'Is this urgent?' -s 'Production is down'\n  jev -p openrouter models\n\nOmitting -m uses jev's default model for the provider unless JEV_MODEL is set.\nWith run, a model in the request JSON takes precedence. Model IDs depend on the provider."
+)]
 struct Cli {
     /// Print the whole response instead of just the answers.
     #[arg(long, global = true)]
     raw: bool,
 
-    /// Backend to send requests to.
+    /// Provider to send requests to (`clef` is an alias for `cloudflare`).
     #[arg(
         short = 'p',
         long,
@@ -82,7 +89,7 @@ struct Cli {
     provider: Provider,
 
     /// Model to send the request to (default depends on the provider).
-    #[arg(long, global = true, env = "JEV_MODEL")]
+    #[arg(short = 'm', long, global = true, env = "JEV_MODEL")]
     model: Option<String>,
 
     /// State as literal text.
