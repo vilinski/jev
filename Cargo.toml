@@ -1,6 +1,6 @@
 [package]
 name = "jev"
-version = "0.4.1"
+version = "0.4.2"
 edition = "2024"
 description = "CLI for System One decision models (TypeSafe Jev, Cloudflare Clef, local Ollama, OpenAI via logprobs): typed questions in, calibrated probabilities out, API key kept out of the caller"
 keywords = ["typesafe", "jev", "clef", "llm", "cli"]

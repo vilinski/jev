@@ -158,9 +158,8 @@ impl Client {
         let result = match self.provider.wire(model) {
             Wire::SystemOne => self.execute(&Method::POST, &url, Some(body)).await,
             Wire::Decisions => self.decisions_system_one(&url, body, model).await,
-            Wire::ChatLogprobs | Wire::ChatStructured => {
-                self.openai_system_one(&url, body, model).await
-            }
+            Wire::ChatLogprobs => self.openai_system_one(&url, body, model, false).await,
+            Wire::ChatStructured => self.openai_system_one(&url, body, model, true).await,
         };
         match &result {
             Ok(response) => {
@@ -209,13 +208,13 @@ impl Client {
         url: &str,
         body: &Value,
         model: &str,
+        structured: bool,
     ) -> Result<Response, Error> {
         let questions = body
             .get("questions")
             .and_then(Value::as_object)
             .ok_or_else(|| Error::Usage("the request needs a `questions` object".to_owned()))?;
         let state = util::render_state(body.get("state").unwrap_or(&Value::Null));
-        let structured = self.provider.wire(model) == Wire::ChatStructured;
         let prepared = questions
             .iter()
             .map(|(id, question)| {
@@ -243,22 +242,17 @@ impl Client {
             let (reply_in, reply_out) = token_totals(&reply.body);
             input += reply_in;
             output += reply_out;
-            cached += reply
-                .body
-                .pointer("/usage/prompt_tokens_details/cached_tokens")
-                .and_then(Value::as_u64)
-                .unwrap_or(0);
+            cached += cached_tokens(&reply.body);
             request_id = request_id.or(reply.request_id);
-            let answer = if structured {
-                crate::structured::interpret(item, &reply.body)
-                    .unwrap_or_else(|error| json!({"type":"refusal", "reason":error.to_string()}))
-            } else {
-                openai::interpret(item, &reply.body)?
-            };
             if structured {
+                // A malformed self-reported answer refuses this question, not the request.
+                let answer = crate::structured::interpret(item, &reply.body)
+                    .unwrap_or_else(|error| json!({"type":"refusal", "reason":error.to_string()}));
+                answers.insert((*id).clone(), answer);
                 provider_responses.insert((*id).clone(), reply.body);
+            } else {
+                answers.insert((*id).clone(), openai::interpret(item, &reply.body)?);
             }
-            answers.insert((*id).clone(), answer);
         }
         Ok(Response {
             body: json!({
@@ -406,7 +400,7 @@ impl Client {
     /// Proves the credential, account and model work, returning what was done.
     /// Providers without a model listing get one tiny test request instead.
     pub async fn probe(&self, model: &str) -> Result<&'static str, Error> {
-        if self.provider != Provider::Openrouter && self.provider.models_url(&self.base).is_some() {
+        if self.provider.probe_via_models() {
             self.models().await?;
             return Ok("reachable");
         }
@@ -460,6 +454,13 @@ pub fn token_totals(body: &Value) -> (u64, u64) {
             .unwrap_or(0)
     };
     (count("input"), count("output"))
+}
+
+/// Input tokens served from the provider's prompt cache, zero where absent.
+fn cached_tokens(body: &Value) -> u64 {
+    body.pointer("/usage/prompt_tokens_details/cached_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
 }
 
 /// Reads a header as a string, ignoring values that are not valid UTF-8.

@@ -7,59 +7,39 @@
 use serde_json::{Value, json};
 
 use crate::Error;
-use crate::openai::{Kind, Prepared, concentration};
-use crate::util::round4;
+use crate::question::{Kind, Prepared, answer, parse_kind};
+
+/// Most options or levels one question may offer.
+const MAX_OPTIONS: usize = 512;
 
 /// Builds a JSON-schema completion for one typed question without an option-letter limit.
 pub fn prepare(model: &str, state: &str, question: &Value) -> Result<Prepared, Error> {
-    let criteria = question.get("criteria");
-    let kind = match question.get("type").and_then(Value::as_str) {
-        Some("noul") => Kind::Noul,
-        Some("choice") => Kind::Choice(
-            criteria
-                .and_then(Value::as_object)
-                .ok_or_else(|| Error::Usage("a choice needs a criteria object".to_owned()))?
-                .keys()
-                .cloned()
-                .collect(),
-        ),
-        Some("score") => Kind::Score(
-            criteria
-                .and_then(Value::as_array)
-                .ok_or_else(|| Error::Usage("a score needs criteria levels".to_owned()))?
-                .iter()
-                .map(|v| v.as_str().unwrap_or_default().to_owned())
-                .collect(),
-        ),
-        _ => return Err(Error::Usage("use noul, choice or score".to_owned())),
-    };
+    let kind = parse_kind(question, MAX_OPTIONS, MAX_OPTIONS)?;
     let number = json!({"type": "number", "minimum": 0, "maximum": 1});
-    let (properties, required, count) = match &kind {
-        Kind::Noul => (json!({"noul": number}), json!(["noul"]), 1),
-        Kind::Choice(names) | Kind::Score(names) => {
-            if names.len() < 2 || names.len() > 512 {
-                return Err(Error::Usage("expected 2 to 512 allowed answers".to_owned()));
-            }
-            let keys: Vec<String> = match &kind {
-                Kind::Score(_) => (0..names.len()).map(|i| i.to_string()).collect(),
-                _ => names.clone(),
-            };
-            let probs: serde_json::Map<String, Value> = keys
-                .iter()
-                .map(|key| (key.clone(), number.clone()))
-                .collect();
-            (
-                json!({"probabilities": {"type":"object", "properties":probs,"required":keys,"additionalProperties":false}}),
-                json!(["probabilities"]),
-                names.len(),
-            )
-        }
+    let labels = kind.labels();
+    let (properties, required) = if labels.is_empty() {
+        (json!({"noul": number}), json!(["noul"]))
+    } else {
+        let probs: serde_json::Map<String, Value> = labels
+            .iter()
+            .map(|label| (label.clone(), number.clone()))
+            .collect();
+        (
+            json!({"probabilities": {"type":"object", "properties":probs,"required":labels,"additionalProperties":false}}),
+            json!(["probabilities"]),
+        )
     };
+    let count = labels.len().max(1);
+    // `Value`'s Display writes JSON, so the question is serialised without being cloned.
+    let payload = format!(
+        r#"{{"state":{},"question":{question}}}"#,
+        Value::from(state)
+    );
     let body = json!({
         "model": model,
         "messages": [
             {"role":"system","content":"Evaluate the question against the state. Return only the requested JSON. For noul, estimate the probability that the statement is true. For choice or score, estimate a probability for EVERY allowed option; probabilities must sum to one. Use the question's exact option keys, or zero-based level indices for score. Do not include an explanation."},
-            {"role":"user","content":json!({"state":state,"question":question}).to_string()}
+            {"role":"user","content":payload}
         ],
         "temperature": 0,
         "seed": 7,
@@ -76,69 +56,33 @@ pub fn interpret(prepared: &Prepared, response: &Value) -> Result<Value, Error> 
         .pointer("/choices/0/message/content")
         .and_then(Value::as_str)
         .ok_or_else(|| Error::Usage("the chat model returned no answer content".to_owned()))?;
-    let answer: Value = serde_json::from_str(content)
+    let parsed: Value = serde_json::from_str(content)
         .map_err(|_| Error::Usage("the chat model returned invalid decision JSON".to_owned()))?;
-    if matches!(prepared.kind, Kind::Noul) {
-        let p = probability(answer.get("noul"))?;
-        return Ok(json!({"type":"noul","noul":round4(p)}));
-    }
-    let names: Vec<String> = match &prepared.kind {
-        Kind::Choice(names) => names.clone(),
-        Kind::Score(levels) => (0..levels.len()).map(|i| i.to_string()).collect(),
-        Kind::Noul => unreachable!(),
+    let values = if matches!(prepared.kind, Kind::Noul) {
+        vec![probability(parsed.get("noul"))?]
+    } else {
+        let source = parsed
+            .get("probabilities")
+            .and_then(Value::as_object)
+            .ok_or_else(|| Error::Usage("missing decision probabilities".to_owned()))?;
+        let mut values = prepared
+            .kind
+            .labels()
+            .iter()
+            .map(|label| probability(source.get(label)))
+            .collect::<Result<Vec<_>, _>>()?;
+        let sum: f64 = values.iter().sum();
+        if !(0.99..=1.01).contains(&sum) {
+            return Err(Error::Usage(
+                "decision probabilities must sum to one".to_owned(),
+            ));
+        }
+        for value in &mut values {
+            *value /= sum;
+        }
+        values
     };
-    let source = answer
-        .get("probabilities")
-        .and_then(Value::as_object)
-        .ok_or_else(|| Error::Usage("missing decision probabilities".to_owned()))?;
-    let mut values = names
-        .iter()
-        .map(|name| probability(source.get(name)))
-        .collect::<Result<Vec<_>, _>>()?;
-    let sum: f64 = values.iter().sum();
-    if !(0.99..=1.01).contains(&sum) {
-        return Err(Error::Usage(
-            "decision probabilities must sum to one".to_owned(),
-        ));
-    }
-    for value in &mut values {
-        *value /= sum;
-    }
-    let distribution: serde_json::Map<String, Value> = names
-        .iter()
-        .zip(&values)
-        .map(|(name, p)| (name.clone(), json!(p)))
-        .collect();
-    let confidence = round4(concentration(&values));
-    match &prepared.kind {
-        Kind::Choice(_) => {
-            let best = values
-                .iter()
-                .enumerate()
-                .max_by(|a, b| a.1.total_cmp(b.1))
-                .ok_or_else(|| Error::Usage("empty decision probabilities".to_owned()))?
-                .0;
-            Ok(
-                json!({"type":"choice","choice":names[best],"probabilities":distribution,"confidence":confidence}),
-            )
-        }
-        Kind::Score(levels) => {
-            let score: f64 = values
-                .iter()
-                .enumerate()
-                .map(|(i, p)| f64::from(u32::try_from(i).unwrap_or(u32::MAX)) * p)
-                .sum();
-            let legend: serde_json::Map<String, Value> = names
-                .iter()
-                .zip(levels)
-                .map(|(name, level)| (name.clone(), json!(level)))
-                .collect();
-            Ok(
-                json!({"type":"score","score":round4(score),"probabilities":distribution,"confidence":confidence,"legend":legend}),
-            )
-        }
-        Kind::Noul => unreachable!(),
-    }
+    Ok(answer(&prepared.kind, &values))
 }
 
 /// Reads a finite probability in the closed unit interval.

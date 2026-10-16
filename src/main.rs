@@ -17,6 +17,7 @@ mod decisions;
 mod key;
 mod openai;
 mod provider;
+mod question;
 mod structured;
 mod telemetry;
 mod util;

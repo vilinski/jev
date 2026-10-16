@@ -71,6 +71,11 @@ struct Spec {
     models_path: Option<&'static str>,
     /// The only models the provider serves, for providers that restrict them.
     fixed_models: Option<&'static [&'static str]>,
+    /// Whether the model listing is public, so fetching it proves nothing about the credential.
+    public_models: bool,
+    /// Chat completions path for every fixed model except the default one, which
+    /// uses `path`; those models speak [`Wire::ChatStructured`].
+    chat_path: Option<&'static str>,
     /// Wire protocol.
     wire: Wire,
 }
@@ -93,6 +98,8 @@ const BASE: Spec = Spec {
     path: "/v1/systemone",
     models_path: None,
     fixed_models: None,
+    public_models: false,
+    chat_path: None,
     wire: Wire::SystemOne,
 };
 
@@ -154,6 +161,7 @@ const CELERIS: Spec = Spec {
     secret: Some(key::CELERIS_KEY),
     path: "/celeris-1-decision/v1/systemone",
     fixed_models: Some(&CELERIS_MODELS),
+    chat_path: Some("/<model>/v1/chat/completions"),
     ..BASE
 };
 
@@ -163,6 +171,7 @@ const OPENROUTER: Spec = Spec {
     model: "typesafe/jev-1.13",
     secret: Some(key::OPENROUTER_KEY),
     models_path: Some("/v1/models?output_modalities=decisions"),
+    public_models: true,
     ..BASE
 };
 
@@ -202,10 +211,11 @@ impl Provider {
 
     /// Wire protocol the client has to speak.
     pub fn wire(self, model: &str) -> Wire {
-        if self == Self::Celeris && matches!(model.trim(), "celeris-1" | "celeris-1-magnus") {
+        let spec = self.spec();
+        if spec.chat_path.is_some() && model.trim() != spec.model {
             Wire::ChatStructured
         } else {
-            self.spec().wire
+            spec.wire
         }
     }
 
@@ -238,15 +248,21 @@ impl Provider {
 
     /// URL that receives a System One request for `model`.
     pub fn system_one_url(self, base: &str, account: Option<&str>, model: &str) -> String {
-        let template = if self.wire(model) == Wire::ChatStructured {
-            "/<model>/v1/chat/completions"
-        } else {
-            self.spec().path
+        let spec = self.spec();
+        let template = match spec.chat_path {
+            Some(chat_path) if model.trim() != spec.model => chat_path,
+            _ => spec.path,
         };
         let path = template
             .replace("<account>", account.unwrap_or_default())
             .replace("<model>", model.trim());
         format!("{base}{path}")
+    }
+
+    /// Whether a model listing exists and fetching it proves the credential works.
+    pub const fn probe_via_models(self) -> bool {
+        let spec = self.spec();
+        spec.models_path.is_some() && !spec.public_models
     }
 
     /// URL listing the available models, where the provider has one.

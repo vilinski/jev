@@ -19,6 +19,8 @@ same request and print the same `answers` shape. See [README.md](README.md).
 | `src/provider.rs` | One `Spec` table entry per provider (URL, credential, models, wire protocol) |
 | `src/openai.rs` | `openai-chat` adapter: one logprobs chat completion per question |
 | `src/decisions.rs` | `openai` adapter: System One request to and from OpenAI's `/v1/decisions` |
+| `src/structured.rs` | Celeris chat models prompted for JSON probabilities, same answer shape |
+| `src/question.rs` | `Kind`, question parsing and answer shaping shared by the chat adapters |
 | `src/util.rs` | Helpers shared by the adapters |
 | `src/key.rs` | Keychain / environment credential loading, `Secret` redaction |
 | `src/telemetry.rs` | Optional OpenTelemetry export (Langfuse or generic OTLP/HTTP) |

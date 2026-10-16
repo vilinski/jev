@@ -9,36 +9,19 @@
 
 use std::fmt::Write as _;
 
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
 use crate::Error;
-use crate::util::round4;
+use crate::question::{Kind, Prepared, answer, parse_kind};
 
 /// How many `top_logprobs` to request; the API allows up to 20.
 const TOP_LOGPROBS: u32 = 20;
 
-/// Most options or levels a single answer token can name.
+/// Most options a single answer letter can name.
 const MAX_CHOICES: usize = 26;
 
-/// What kind of answer a prepared request expects.
-#[derive(Debug)]
-pub enum Kind {
-    /// `yes` or `no`.
-    Noul,
-    /// One option; the names are in the order of the letters `A`, `B`, ...
-    Choice(Vec<String>),
-    /// One level; the descriptions are in ascending order, labelled `0`, `1`, ...
-    Score(Vec<String>),
-}
-
-/// One question translated into a chat completion request.
-#[derive(Debug)]
-pub struct Prepared {
-    /// Body for `POST /v1/chat/completions`.
-    pub body: Value,
-    /// How to read the answer.
-    pub kind: Kind,
-}
+/// Most levels a single answer digit can name.
+const MAX_LEVELS: usize = 10;
 
 /// Letter that labels the option at `index` (`A`, `B`, ...).
 fn letter(index: usize) -> char {
@@ -51,66 +34,33 @@ pub fn prepare(model: &str, state: &str, question: &Value) -> Result<Prepared, E
         .get("instructions")
         .and_then(Value::as_str)
         .ok_or_else(|| Error::Usage("a question needs an `instructions` string".to_owned()))?;
-    let criteria = question.get("criteria");
-    let (kind, answer_rule, options) = match question.get("type").and_then(Value::as_str) {
-        Some("noul") => (
-            Kind::Noul,
-            "Reply with exactly one word: yes or no.".to_owned(),
-            String::new(),
-        ),
-        Some("choice") => {
-            let map = criteria.and_then(Value::as_object).ok_or_else(|| {
-                Error::Usage("a choice question needs `criteria` as an object".to_owned())
-            })?;
-            if map.len() < 2 || map.len() > MAX_CHOICES {
-                return Err(Error::Usage(format!(
-                    "a choice question needs 2 to {MAX_CHOICES} options with this provider"
-                )));
-            }
+    let kind = parse_kind(question, MAX_CHOICES, MAX_LEVELS)?;
+    let (answer_rule, options) = match &kind {
+        Kind::Noul => ("Reply with exactly one word: yes or no.", String::new()),
+        Kind::Choice(_) => {
             let mut listing = String::from("\n\nOptions:\n");
-            let mut names = Vec::new();
-            for (index, (name, description)) in map.iter().enumerate() {
+            let criteria = question.get("criteria").and_then(Value::as_object);
+            for (index, (name, description)) in criteria.into_iter().flatten().enumerate() {
                 let _ = write!(listing, "{}) {name}", letter(index));
                 if let Some(text) = description.as_str() {
                     let _ = write!(listing, ": {text}");
                 }
                 listing.push('\n');
-                names.push(name.clone());
             }
             (
-                Kind::Choice(names),
-                "Reply with exactly one character: the letter of the best option.".to_owned(),
+                "Reply with exactly one character: the letter of the best option.",
                 listing,
             )
         }
-        Some("score") => {
-            let levels: Vec<String> = criteria
-                .and_then(Value::as_array)
-                .ok_or_else(|| {
-                    Error::Usage("a score question needs `criteria` as an array".to_owned())
-                })?
-                .iter()
-                .map(|level| level.as_str().unwrap_or_default().to_owned())
-                .collect();
-            if levels.len() < 2 || levels.len() > 10 {
-                return Err(Error::Usage(
-                    "a score question needs 2 to 10 levels with this provider".to_owned(),
-                ));
-            }
+        Kind::Score(levels) => {
             let mut listing = String::from("\n\nLevels, in ascending order:\n");
             for (index, level) in levels.iter().enumerate() {
                 let _ = writeln!(listing, "{index}) {level}");
             }
             (
-                Kind::Score(levels),
-                "Reply with exactly one digit: the number of the best level.".to_owned(),
+                "Reply with exactly one digit: the number of the best level.",
                 listing,
             )
-        }
-        other => {
-            return Err(Error::Usage(format!(
-                "unsupported question type {other:?}; use noul, choice or score"
-            )));
         }
     };
 
@@ -170,102 +120,38 @@ fn distribution(
     Ok(mass.into_iter().map(|m| m / total).collect())
 }
 
-/// `1 - H/ln(n)`: 1 for a certain answer, 0 for a uniform one.
-pub fn concentration(probabilities: &[f64]) -> f64 {
-    let entropy: f64 = probabilities
-        .iter()
-        .filter(|p| **p > 0.0)
-        .map(|p| -p * p.ln())
-        .sum();
-    // The counts are tiny, so the conversion to f64 is exact.
-    #[allow(clippy::cast_precision_loss)]
-    let max = (probabilities.len() as f64).ln();
-    if max > 0.0 {
-        (1.0 - entropy / max).clamp(0.0, 1.0)
-    } else {
-        1.0
-    }
-}
-
 /// Turns a chat completion into the answer a System One provider would give.
 pub fn interpret(prepared: &Prepared, response: &Value) -> Result<Value, Error> {
-    match &prepared.kind {
-        Kind::Noul => {
-            let p = distribution(
-                response,
-                |t| match t.to_ascii_lowercase().as_str() {
-                    "yes" => Some(0),
-                    "no" => Some(1),
-                    _ => None,
-                },
-                2,
-            )?;
-            Ok(json!({ "type": "noul", "noul": round4(p[0]) }))
-        }
-        Kind::Choice(names) => {
-            let p = distribution(
-                response,
-                |t| {
-                    let mut chars = t.chars();
-                    let (first, rest) = (chars.next()?.to_ascii_uppercase(), chars.next());
-                    let index = (first as usize).checked_sub('A' as usize)?;
-                    (rest.is_none() && index < names.len()).then_some(index)
-                },
-                names.len(),
-            )?;
-            let best = p
-                .iter()
-                .enumerate()
-                .max_by(|a, b| a.1.total_cmp(b.1))
-                .map_or(0, |(index, _)| index);
-            let probabilities: Map<String, Value> = names
-                .iter()
-                .zip(&p)
-                .map(|(name, prob)| (name.clone(), json!(round4(*prob))))
-                .collect();
-            Ok(json!({
-                "type": "choice",
-                "choice": names[best],
-                "confidence": round4(concentration(&p)),
-                "probabilities": probabilities,
-            }))
-        }
-        Kind::Score(levels) => {
-            let p = distribution(
-                response,
-                |t| {
-                    let digit = t.parse::<usize>().ok()?;
-                    (t.len() == 1 && digit < levels.len()).then_some(digit)
-                },
-                levels.len(),
-            )?;
-            let mut score = 0.0;
-            for (index, prob) in p.iter().enumerate() {
-                // At most ten levels, so the conversion is exact.
-                #[allow(clippy::cast_precision_loss)]
-                {
-                    score += index as f64 * prob;
-                }
-            }
-            let probabilities: Map<String, Value> = p
-                .iter()
-                .enumerate()
-                .map(|(index, prob)| (index.to_string(), json!(round4(*prob))))
-                .collect();
-            let legend: Map<String, Value> = levels
-                .iter()
-                .enumerate()
-                .map(|(index, level)| (index.to_string(), json!(level)))
-                .collect();
-            Ok(json!({
-                "type": "score",
-                "score": round4(score),
-                "confidence": round4(concentration(&p)),
-                "probabilities": probabilities,
-                "legend": legend,
-            }))
-        }
-    }
+    let p = match &prepared.kind {
+        Kind::Noul => distribution(
+            response,
+            |t| match t.to_ascii_lowercase().as_str() {
+                "yes" => Some(0),
+                "no" => Some(1),
+                _ => None,
+            },
+            2,
+        )?,
+        Kind::Choice(names) => distribution(
+            response,
+            |t| {
+                let mut chars = t.chars();
+                let (first, rest) = (chars.next()?.to_ascii_uppercase(), chars.next());
+                let index = (first as usize).checked_sub('A' as usize)?;
+                (rest.is_none() && index < names.len()).then_some(index)
+            },
+            names.len(),
+        )?,
+        Kind::Score(levels) => distribution(
+            response,
+            |t| {
+                let digit = t.parse::<usize>().ok()?;
+                (t.len() == 1 && digit < levels.len()).then_some(digit)
+            },
+            levels.len(),
+        )?,
+    };
+    Ok(answer(&prepared.kind, &p))
 }
 
 #[cfg(test)]
@@ -332,11 +218,5 @@ mod tests {
     fn rejects_unknown_question_types() {
         let result = prepare("m", "x", &json!({"type": "rank", "instructions": "q"}));
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn certain_answers_have_full_concentration() {
-        assert!((concentration(&[1.0, 0.0]) - 1.0).abs() < 1e-9);
-        assert!(concentration(&[0.5, 0.5]).abs() < 1e-9);
     }
 }
