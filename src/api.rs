@@ -155,11 +155,13 @@ impl Client {
         let url = self
             .provider
             .system_one_url(&self.base, self.account.as_deref(), model);
-        let result = match self.provider.wire(model) {
+        let wire = self.provider.wire(model);
+        let result = match wire {
             Wire::SystemOne => self.execute(&Method::POST, &url, Some(body)).await,
             Wire::Decisions => self.decisions_system_one(&url, body, model).await,
-            Wire::ChatLogprobs => self.openai_system_one(&url, body, model, false).await,
-            Wire::ChatStructured => self.openai_system_one(&url, body, model, true).await,
+            Wire::ChatLogprobs | Wire::ChatStructured => {
+                self.openai_system_one(&url, body, model, wire).await
+            }
         };
         match &result {
             Ok(response) => {
@@ -208,8 +210,9 @@ impl Client {
         url: &str,
         body: &Value,
         model: &str,
-        structured: bool,
+        wire: Wire,
     ) -> Result<Response, Error> {
+        let structured = wire == Wire::ChatStructured;
         let questions = body
             .get("questions")
             .and_then(Value::as_object)

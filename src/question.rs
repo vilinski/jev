@@ -97,6 +97,14 @@ pub fn concentration(probabilities: &[f64]) -> f64 {
 
 /// Shapes a probability per answer (one entry, `P(true)`, for a noul) into a typed answer.
 pub fn answer(kind: &Kind, p: &[f64]) -> Value {
+    debug_assert!(
+        match kind {
+            // The first entry is P(true); a logprobs reply also carries P(false).
+            Kind::Noul => !p.is_empty(),
+            Kind::Choice(labels) | Kind::Score(labels) => p.len() == labels.len(),
+        },
+        "one probability per answer"
+    );
     let probabilities = |labels: Vec<String>| -> Map<String, Value> {
         labels
             .into_iter()

@@ -30,9 +30,10 @@ pub fn prepare(model: &str, state: &str, question: &Value) -> Result<Prepared, E
         )
     };
     let count = labels.len().max(1);
-    // `Value`'s Display writes JSON, so the question is serialised without being cloned.
+    // `Value`'s Display writes compact JSON, so the question is serialised without being
+    // cloned. Keys stay in the alphabetical order `json!` produced, so the prompt is unchanged.
     let payload = format!(
-        r#"{{"state":{},"question":{question}}}"#,
+        r#"{{"question":{question},"state":{}}}"#,
         Value::from(state)
     );
     let body = json!({
@@ -96,6 +97,19 @@ fn probability(value: Option<&Value>) -> Result<f64, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_prompt_payload_matches_the_serialised_object() {
+        let question = json!({"type":"noul","instructions":"Is it \"bad\"?"});
+        let prepared = prepare("celeris-1", "line\nbreak", &question).expect("prepare");
+        let content = prepared.body["messages"][1]["content"]
+            .as_str()
+            .expect("content");
+        assert_eq!(
+            content,
+            json!({"state":"line\nbreak","question":question}).to_string()
+        );
+    }
 
     #[test]
     fn score_keeps_the_level_legend_and_returns_the_expected_value() {
