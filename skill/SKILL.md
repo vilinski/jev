@@ -43,21 +43,26 @@ endpoint. The fallback `typesafe/jev-1.13` above is our CLI's choice, not an
 OpenRouter preference. See the
 [System One request contract](https://openrouter.ai/docs/guides/community/typesafe-sdk).
 
-Jev 1.14 is selected explicitly with `-p typesafe -m jev-1.14.0` or
-`-p openrouter -m typesafe/jev-1.14`. As of 2026-10-15, TypeSafe
-`jev-preview` points to 1.14; `jev-latest` still points to 1.13.
-Use versioned IDs for reproducible comparisons.
+As of 2026-11-06, TypeSafe `jev-latest` and `jev-preview` both point to
+`jev-1.14.0`. Select it explicitly with `-p typesafe -m jev-1.14.0` or
+`-p openrouter -m typesafe/jev-1.14`; the OpenRouter CLI default remains pinned
+to `typesafe/jev-1.13`. Use versioned IDs for reproducible comparisons and
+revalidate thresholds when changing models. See [TypeSafe’s model aliases](https://docs.typesafe.ai/models#aliases).
 
-Example OpenRouter decision IDs (use `-p openrouter -m <id>`):
+Example OpenRouter decision IDs as of 2026-11-06 (use `-p openrouter -m <id>`):
 
 | Model author | OpenRouter model IDs (`-m`) |
 |---|---|
-| Perplexity | `perplexity/pplx-decider-v1.1-27b`, `~perplexity/pplx-decider-latest` |
-| Nace.AI | `nace-ai/drex-v1.5`, `nace-ai/drex-v2.0` |
+| Perplexity | `perplexity/pplx-decider-v1.2`, `perplexity/pplx-decider-flash-v1.2`, `~perplexity/pplx-decider-latest` |
+| Nace.AI | `nace-ai/drex-max`, `nace-ai/drex-v2.0` |
 | Microsoft | `microsoft/microsoft-decision-1` |
 | Inception | `inception/mercury-decide`, `inception/mercury-decide:free` |
 | Upstage | `upstage/solar-decide`, `upstage/solar-decide-flash` |
-| Liquid AI | `liquid/d1` |
+| Liquid AI | `liquid/d1.1`, `liquid/d1-ultra` |
+| Baseten | `baseten/joey-1`, `baseten/elephant-1`, `baseten/mammoth-1` |
+| Morph | `morph/reflex` |
+| Parallel | `parallel/decisions-fast`, `parallel/decisions-fast:free` |
+| Respan | `respan/span-02` |
 | ScaleDown | `scaledown/classify-1` |
 | Jared Palmer | `jaredpalmer/kev-4b` |
 
@@ -69,8 +74,11 @@ do not require a CLI update. The inference request goes straight to the gateway,
 which validates model availability. No catalogue lookup is added to each call.
 The catalogue's `decisions` modality does not guarantee support for every
 question type or option count; provider capability errors remain visible.
+Some catalogue entries target other APIs: `cloudflare/clairic` uses the
+Extractions API and is outside this CLI’s decision-question interface.
+`liquid/d1` is scheduled to expire on 2026-11-20; use `liquid/d1.1` for new calls.
 
-Every supported OpenRouter model uses `POST /api/v1/systemone` with
+`jev` sends OpenRouter requests to the SDK-compatible `POST /api/v1/systemone` with
 `model`, `state`, and `questions`; responses contain `answers` keyed by question ID:
 
 | Question type | Typed answer fields |
@@ -83,8 +91,13 @@ OpenRouter handles upstream protocol differences, including OpenAI's Decisions
 API. `jev` sends the same System One JSON and reads the same answer fields for all
 approved models, without a model-specific prompt or chat fallback. With `--raw`,
 OpenRouter can also return `model`, `usage`, `id`, and `provider`. Context limits,
-accepted media, and model accuracy still vary. All 18 underlying hosted models were smoke-tested live on 2026-10-14;
-aliases and free access routes are not separate model benchmarks.
+accepted media, and model accuracy still vary. The 2026-10-14 smoke test covered
+the 18 underlying hosted models available then; newly listed models have not
+been verified by that test. Aliases and free access routes are not separate
+model benchmarks. OpenRouter also documents a newer
+[Decisions API](https://openrouter.ai/docs/api/api-reference/alphadecisions/submit-a-decisions-request)
+at `/api/alpha/decisions`; the SDK-compatible route remains documented in its
+[TypeSafe SDK guide](https://openrouter.ai/docs/guides/community/typesafe-sdk).
 
 Model-specific capability limits:
 
@@ -155,9 +168,10 @@ jev run - <<'EOF'
 EOF
 ```
 
-Run verbatim, that returns `severity` **2.13 with confidence 0.13** — and a
-distribution of 0.43 on *"Degraded, workaround exists"*, 0.56 on *"Data loss or
-outage"*, and 0.01 between them. The score 2.13 names a level where almost no
+For example, a possible result is `severity` **2.13 with confidence 0.13** —
+with probability 0.43 on *"Degraded, workaround exists"*, 0.56 on *"Data loss or
+outage"*, and 0.01 between them. This illustrates how to read an answer; actual
+values depend on the provider, model and run. The score 2.13 names a level where almost no
 probability sits. Branching on `2.13` gets you the wrong answer twice; the finding
 is that Jev is split between "annoying" and "serious", which is a ticket for a
 human. This is why rule 3 exists.
@@ -188,10 +202,11 @@ and treat a difference smaller than that spread as noise.
 
 ## Latency
 
-Process startup is ~7ms, but each invocation pays a fresh TLS handshake — measured
-at roughly 700ms to the API. A trivial `jev check` and a real five-question
-inference take the same wall-clock time, so **the connection is the cost, not the
-model**. Ten questions in one `jev run` cost one handshake; ten `jev` calls cost ten.
+Process startup was measured at ~7ms, with roughly 700ms spent connecting to
+the hosted API in that environment. Latency varies with the network, provider
+and model. Each CLI invocation creates a fresh connection; ten questions in one
+`jev run` share that connection, while ten `jev` calls each connect separately.
+Chat adapters still send one inference request per question.
 
 For scoring hundreds of items, do not loop the CLI — write code against the
 [Python or JS SDK](https://docs.typesafe.ai/sdk), which pools connections and runs

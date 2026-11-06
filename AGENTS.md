@@ -7,7 +7,8 @@ Guidance for AI coding agents (and humans) working on `jev`.
 `jev` is a single-binary Rust CLI that sends *state* plus typed *questions*
 (`noul`, `choice`, `score`) to a System One decision model and prints the typed
 answers as JSON. Providers: TypeSafe Jev (default), Cloudflare Clef, local Ollama,
-and OpenAI chat models read through token log-probabilities. All providers take the
+OpenAI Decisions, OpenAI chat models read through token log-probabilities,
+Celeris, and the OpenRouter decision gateway. All providers take the
 same request and print the same `answers` shape. See [README.md](README.md).
 
 ## Layout

@@ -5,18 +5,19 @@
 [![Rust 2024](https://img.shields.io/badge/rust-2024%20edition-orange?logo=rust)](https://doc.rust-lang.org/edition-guide/rust-2024/)
 [![clippy: pedantic + nursery](https://img.shields.io/badge/clippy-pedantic%20%2B%20nursery-success?logo=rust)](Cargo.toml)
 [![unsafe: denied](https://img.shields.io/badge/unsafe-denied-brightgreen)](Cargo.toml)
-[![Providers: TypeSafe | Cloudflare | Ollama | OpenAI](https://img.shields.io/badge/providers-TypeSafe%20%7C%20Cloudflare%20%7C%20Ollama%20%7C%20OpenAI-8A2BE2)](#providers)
+[![Providers: TypeSafe | Cloudflare | Ollama | OpenAI | Celeris | OpenRouter](https://img.shields.io/badge/providers-TypeSafe%20%7C%20Cloudflare%20%7C%20Ollama%20%7C%20OpenAI%20%7C%20Celeris%20%7C%20OpenRouter-8A2BE2)](#providers)
 [![Platforms: macOS | Linux | Windows](https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)](#install)
 [![OpenTelemetry](https://img.shields.io/badge/telemetry-OpenTelemetry%20%2B%20Langfuse-425cc7?logo=opentelemetry)](#telemetry)
 
 CLI for **System One decision models**: [TypeSafe](https://docs.typesafe.ai) Jev,
-Cloudflare Clef, Clef on a local Ollama, or OpenAI chat models read through their log-probabilities. It sends a piece of *state* plus typed
-*questions* and prints the typed answers as JSON.
+Cloudflare Clef, local Ollama, OpenAI Decisions, Celeris, and the OpenRouter
+decision gateway. It also adapts OpenAI chat models through token log-probabilities
+and Celeris generative models through structured JSON. It sends a piece of *state*
+plus typed *questions* and prints typed answers as JSON.
 
-These models are not chat models. They do not generate text, write code or hold a
-conversation. They return calibrated probabilities that ordinary code can branch
-on — which makes them useful for the things we otherwise solve with brittle parsing
-or a hand-written rule per case.
+Native decision models return probabilities that ordinary code can branch on.
+Chat adapters translate generative model responses into the same interface;
+their probability estimates and calibration depend on the model and adapter.
 
 ## Providers
 
@@ -48,21 +49,26 @@ endpoint. The fallback `typesafe/jev-1.13` above is our CLI's choice, not an
 OpenRouter preference. See the
 [System One request contract](https://openrouter.ai/docs/guides/community/typesafe-sdk).
 
-Jev 1.14 is selected explicitly with `-p typesafe -m jev-1.14.0` or
-`-p openrouter -m typesafe/jev-1.14`. As of 2026-10-15, TypeSafe
-`jev-preview` points to 1.14; `jev-latest` still points to 1.13.
-Use versioned IDs for reproducible comparisons.
+As of 2026-11-06, TypeSafe `jev-latest` and `jev-preview` both point to
+`jev-1.14.0`. Select it explicitly with `-p typesafe -m jev-1.14.0` or
+`-p openrouter -m typesafe/jev-1.14`; the OpenRouter CLI default remains pinned
+to `typesafe/jev-1.13`. Use versioned IDs for reproducible comparisons and
+revalidate thresholds when changing models. See [TypeSafe’s model aliases](https://docs.typesafe.ai/models#aliases).
 
-Example OpenRouter decision IDs (use `-p openrouter -m <id>`):
+Example OpenRouter decision IDs as of 2026-11-06 (use `-p openrouter -m <id>`):
 
 | Model author | OpenRouter model IDs (`-m`) |
 |---|---|
-| Perplexity | `perplexity/pplx-decider-v1.1-27b`, `~perplexity/pplx-decider-latest` |
-| Nace.AI | `nace-ai/drex-v1.5`, `nace-ai/drex-v2.0` |
+| Perplexity | `perplexity/pplx-decider-v1.2`, `perplexity/pplx-decider-flash-v1.2`, `~perplexity/pplx-decider-latest` |
+| Nace.AI | `nace-ai/drex-max`, `nace-ai/drex-v2.0` |
 | Microsoft | `microsoft/microsoft-decision-1` |
 | Inception | `inception/mercury-decide`, `inception/mercury-decide:free` |
 | Upstage | `upstage/solar-decide`, `upstage/solar-decide-flash` |
-| Liquid AI | `liquid/d1` |
+| Liquid AI | `liquid/d1.1`, `liquid/d1-ultra` |
+| Baseten | `baseten/joey-1`, `baseten/elephant-1`, `baseten/mammoth-1` |
+| Morph | `morph/reflex` |
+| Parallel | `parallel/decisions-fast`, `parallel/decisions-fast:free` |
+| Respan | `respan/span-02` |
 | ScaleDown | `scaledown/classify-1` |
 | Jared Palmer | `jaredpalmer/kev-4b` |
 
@@ -74,8 +80,11 @@ do not require a CLI update. The inference request goes straight to the gateway,
 which validates model availability. No catalogue lookup is added to each call.
 The catalogue's `decisions` modality does not guarantee support for every
 question type or option count; provider capability errors remain visible.
+Some catalogue entries target other APIs: `cloudflare/clairic` uses the
+Extractions API and is outside this CLI’s decision-question interface.
+`liquid/d1` is scheduled to expire on 2026-11-20; use `liquid/d1.1` for new calls.
 
-Every supported OpenRouter model uses `POST /api/v1/systemone` with
+`jev` sends OpenRouter requests to the SDK-compatible `POST /api/v1/systemone` with
 `model`, `state`, and `questions`; responses contain `answers` keyed by question ID:
 
 | Question type | Typed answer fields |
@@ -88,8 +97,13 @@ OpenRouter handles upstream protocol differences, including OpenAI's Decisions
 API. `jev` sends the same System One JSON and reads the same answer fields for all
 approved models, without a model-specific prompt or chat fallback. With `--raw`,
 OpenRouter can also return `model`, `usage`, `id`, and `provider`. Context limits,
-accepted media, and model accuracy still vary. All 18 underlying hosted models were smoke-tested live on 2026-10-14;
-aliases and free access routes are not separate model benchmarks.
+accepted media, and model accuracy still vary. The 2026-10-14 smoke test covered
+the 18 underlying hosted models available then; newly listed models have not
+been verified by that test. Aliases and free access routes are not separate
+model benchmarks. OpenRouter also documents a newer
+[Decisions API](https://openrouter.ai/docs/api/api-reference/alphadecisions/submit-a-decisions-request)
+at `/api/alpha/decisions`; the SDK-compatible route remains documented in its
+[TypeSafe SDK guide](https://openrouter.ai/docs/guides/community/typesafe-sdk).
 
 Model-specific capability limits:
 
@@ -201,7 +215,8 @@ Linux, Credential Manager on Windows:
 | typesafe | `TYPESAFE_API_KEY` |
 | cloudflare | `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` |
 | openrouter | `OPENROUTER_API_KEY` |
-| openai | `OPENAI_API_KEY` |
+| openai, openai-chat | `OPENAI_API_KEY` |
+| celeris | `CELERIS_API_KEY` |
 
 ### Overriding the stored credential
 
@@ -216,7 +231,7 @@ jev login                         store the provider's credential in the OS keyc
 jev logout                        remove it again
 jev check                         report credential source and API reachability
 jev models                        list the models this account may use
-jev run <file.json|->             send a full request body verbatim
+jev run <file.json|->             send a request body, filling in a missing model
 jev noul   <question>             yes/no -> probability
 jev choice <question> <opt>...    one of N   (opt, or opt=description)
 jev score  <question> <level>...  ordered rubric levels
@@ -298,7 +313,8 @@ EOF
 ## Telemetry
 
 `--telemetry` (or `JEV_TELEMETRY=true`) exports OpenTelemetry traces over HTTP.
-It works with every provider (TypeSafe, Cloudflare, Ollama and OpenAI); an OpenAI request records one model call with one attempt span per question. Telemetry is off by default;
+It works with every provider, including Celeris and OpenRouter. Chat adapters
+record one model call with attempt spans per question. Telemetry is off by default;
 `login` and `logout` never export traces.
 
 For Langfuse, provide `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` and optionally
